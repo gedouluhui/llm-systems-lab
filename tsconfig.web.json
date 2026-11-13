@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "declaration": false,
+    "noEmitOnError": true,
+    "rootDir": ".",
+    "outDir": "apps/web/dist",
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["packages/**/*.ts", "apps/web/src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests", "artifacts", "reference", ".superpowers"]
+}

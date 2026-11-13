@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python reference dependency
+        run: python -m pip install "numpy>=2,<3"
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Node and TypeScript tests
+        run: npm test
+      - name: Eight-stage verification gate
+        run: node scripts/verify.mjs
+      - name: Locate a Chromium browser
+        run: |
+          BROWSER="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
+          test -n "$BROWSER"
+          echo "LAB_BROWSER=$BROWSER" >> "$GITHUB_ENV"
+      - name: Browser E2E
+        run: node scripts/e2e-web.mjs
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence
+          if-no-files-found: warn
+          path: |
+            artifacts/a2/
+            artifacts/verify-receipt.json
+            artifacts/verify.log

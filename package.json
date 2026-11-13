@@ -1,0 +1,54 @@
+{
+  "name": "llm-systems-lab",
+  "version": "0.1.0-a1",
+  "private": true,
+  "description": "A tiny decoder that turns LLM inference correctness into executable evidence: independent NumPy reference, KV-cache faults, and a static browser lab.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gedouluhui/llm-systems-lab.git"
+  },
+  "homepage": "https://github.com/gedouluhui/llm-systems-lab#readme",
+  "bugs": {
+    "url": "https://github.com/gedouluhui/llm-systems-lab/issues"
+  },
+  "keywords": [
+    "llm",
+    "transformer",
+    "kv-cache",
+    "inference",
+    "numerical-correctness",
+    "fault-injection",
+    "typescript",
+    "numpy",
+    "education"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "bin": {
+    "llm-systems-lab": "dist/src/cli.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:web": "node scripts/build-web.mjs",
+    "serve:web": "node scripts/serve-web.mjs",
+    "demo": "node dist/src/cli.js demo",
+    "pretest": "npm run build && node scripts/build-web.mjs",
+    "test": "node --test --test-concurrency=1 tests/",
+    "test:web": "node scripts/build-web.mjs && node --test --test-concurrency=1 tests/serve-web.test.mjs tests/web-build.test.mjs tests/web-i18n.test.mjs tests/web-view-model.test.mjs",
+    "e2e:web": "node scripts/e2e-web.mjs",
+    "mutation": "node scripts/mutation-check.mjs",
+    "verify": "node scripts/verify.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.0",
+    "typescript": "5.9.3"
+  }
+}

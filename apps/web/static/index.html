@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    >
+    <meta name="referrer" content="no-referrer">
+    <title>LLM Systems Lab — inspect the cache</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to the lab</a>
+
+    <header class="masthead">
+      <p class="stamp">LLM SYSTEMS LAB / NUMERICAL</p>
+      <h1>See what the cache actually does.</h1>
+      <p class="lede">A tiny decoder you can break, inspect and restore.</p>
+      <p class="spec">tiny-decoder-v1 · 2 layers · 2 heads · 16 dim · 32 vocab · 64 token context</p>
+    </header>
+
+    <main id="main" tabindex="-1">
+      <section class="console">
+        <aside class="rail" aria-label="Experiment controls">
+          <div class="rail-head">
+            <p class="stamp">01 / SETUP</p>
+            <button
+              id="lang-button"
+              type="button"
+              class="ghost"
+              data-copy="langButton"
+              aria-label="Switch interface language / 切换界面语言"
+            >中文</button>
+          </div>
+
+          <form id="scenario-form" novalidate>
+            <div class="field">
+              <label for="tokens-input" data-copy="tokensLabel">Tokens</label>
+              <input
+                id="tokens-input"
+                name="tokens"
+                type="text"
+                value="1, 4, 2, 8, 3, 9"
+                inputmode="numeric"
+                autocomplete="off"
+                spellcheck="false"
+              >
+              <p class="hint">Integers 0–31, up to 64 tokens, separated by commas or spaces.</p>
+            </div>
+
+            <div class="field">
+              <label for="seed-input" data-copy="seedLabel">Seed</label>
+              <input id="seed-input" name="seed" type="number" min="0" max="4294967295" step="1" value="7">
+              <p class="hint">Integer in [0, 4294967295]. Seed 7 is the documented fingerprint.</p>
+            </div>
+
+            <fieldset class="faults">
+              <legend data-copy="faultLabel">Injected fault</legend>
+              <label class="choice">
+                <input type="radio" name="fault" value="none" checked>
+                <span data-copy="faultNone">None</span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="fault" value="position-offset">
+                <span data-copy="faultPositionOffset">Position offset</span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="fault" value="cache-overwrite">
+                <span data-copy="faultCacheOverwrite">Cache overwrite</span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="fault" value="mask-current-only">
+                <span data-copy="faultMaskCurrentOnly">Mask current only</span>
+              </label>
+            </fieldset>
+
+            <p id="fault-teaching" class="hint">Injected fault: None</p>
+
+            <button id="run-button" type="button" class="primary" data-copy="runButton">Run comparison</button>
+            <p id="run-status" class="status" role="status" aria-live="polite"></p>
+          </form>
+
+          <nav class="route" aria-label="Route through the lab">
+            <p class="stamp">ROUTE</p>
+            <ol>
+              <li><a href="#capture"><span class="route-index">01</span> <span data-copy="captureTitle">Cache capture</span></a></li>
+              <li><a href="#step-panel"><span class="route-index">02</span> <span data-copy="stepTitle">Per-position comparison</span></a></li>
+              <li><a href="#cache-panel"><span class="route-index">03</span> <span data-copy="cacheTitle">KV cache slots</span></a></li>
+              <li><a href="#paging-panel"><span class="route-index">04</span> <span data-copy="pagingTitle">Paging experiment</span></a></li>
+              <li><a href="#export-panel"><span class="route-index">05</span> <span data-copy="exportTitle">Save experiment</span></a></li>
+            </ol>
+          </nav>
+        </aside>
+
+        <section class="instrument" aria-label="Instrument">
+          <section class="panel capture-panel" aria-labelledby="capture-heading">
+            <div class="panel-head">
+              <div>
+                <p class="stamp">02 / CAPTURE</p>
+                <h2 id="capture-heading" data-copy="captureTitle">Cache capture</h2>
+              </div>
+              <div class="lamp-block">
+                <span id="status-lamp" data-state="idle" aria-hidden="true"></span>
+                <span id="status-word" class="stamp">IDLE</span>
+              </div>
+            </div>
+            <p class="note" data-copy="captureHint">One column per position: token, layer writes and reads, overwrite marks, and whether the paths diverged there.</p>
+            <div id="capture" class="capture" role="group" aria-label="Cache capture by position"></div>
+            <div class="legend" aria-hidden="true">
+              <span><i class="legend-bar legend-write"></i> write</span>
+              <span><i class="legend-bar legend-read"></i> read</span>
+              <span><i class="legend-bar legend-overwrite"></i> overwrite</span>
+            </div>
+          </section>
+
+          <section class="panel summary-panel" aria-labelledby="summary-heading">
+            <h2 id="summary-heading" data-copy="summaryTitle">Result summary</h2>
+            <dl id="summary" class="summary">
+              <div class="summary-row">
+                <dt data-copy="statusLabel">Status</dt>
+                <dd data-field="passes">—</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="firstDivergence">First divergence</dt>
+                <dd data-field="first-divergence">—</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="maxAbs">Max absolute error</dt>
+                <dd data-field="max-abs">—</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="maxRel">Max relative error</dt>
+                <dd data-field="max-rel">—</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="fingerprint">Weight fingerprint</dt>
+                <dd data-field="fingerprint" class="mono">—</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="engine">Engine</dt>
+                <dd data-field="engine" class="mono">—</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="computeTime">Compute time</dt>
+                <dd data-field="compute" class="mono">—</dd>
+              </div>
+            </dl>
+            <p class="note" data-copy="notGpuTime">CPU time for this tiny model, not GPU or serving latency.</p>
+          </section>
+
+          <section class="panel" id="step-panel" aria-labelledby="step-heading">
+            <h2 id="step-heading" data-copy="stepTitle">Per-position comparison</h2>
+            <p class="note" data-copy="stepHint">Every row compares the full-prefix output with the cached output at one position, including each layer’s hidden state.</p>
+            <div class="table-wrap" tabindex="0" role="region" aria-label="Per-position comparison table">
+              <table id="step-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Position</th>
+                    <th scope="col">Token</th>
+                    <th scope="col">Logits</th>
+                    <th scope="col" class="num">max |Δ|</th>
+                    <th scope="col" class="num">max rel</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <h3 id="detail-heading" data-copy="detailTitle">Step detail</h3>
+            <div id="step-detail" class="detail">Run a scenario to inspect a position.</div>
+          </section>
+
+          <section class="panel" id="cache-panel" aria-labelledby="cache-heading">
+            <h2 id="cache-heading" data-copy="cacheTitle">KV cache slots</h2>
+            <p class="note" data-copy="cacheHint">Slots are append-only unless a fault overwrites one. Read counts show how far attention could see.</p>
+            <div id="cache" class="cache"></div>
+          </section>
+
+          <section class="panel" id="paging-panel" aria-labelledby="paging-heading">
+            <h2 id="paging-heading" data-copy="pagingTitle">Paging experiment</h2>
+            <p class="note" data-copy="pagingHint">Append and release one request. Watch pages fill, and how much allocated memory is waste.</p>
+            <form id="paging-form" novalidate>
+              <div class="paging-controls">
+                <div class="field">
+                  <label for="page-size" data-copy="pageSize">Page size (tokens)</label>
+                  <input id="page-size" name="page-size" type="number" min="1" max="64" step="1" value="16">
+                </div>
+                <div class="field">
+                  <label for="page-count" data-copy="pageCount">Page count</label>
+                  <input id="page-count" name="page-count" type="number" min="1" max="64" step="1" value="4">
+                </div>
+                <div class="field">
+                  <label for="request-id" data-copy="requestId">Request ID</label>
+                  <input id="request-id" name="request-id" type="text" value="a" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="field">
+                  <label for="append-tokens" data-copy="appendTokens">Tokens to append</label>
+                  <input id="append-tokens" name="append-tokens" type="number" min="1" max="4096" step="1" value="16">
+                </div>
+                <div class="field actions">
+                  <button id="append-button" type="button" class="primary" data-copy="appendButton">Append</button>
+                  <button id="release-button" type="button" class="secondary" data-copy="releaseButton">Release</button>
+                </div>
+              </div>
+            </form>
+            <p id="paging-status" class="status" role="status" aria-live="polite"></p>
+            <div id="page-map" class="page-map" role="group" aria-label="Page map"></div>
+            <dl id="paging-summary" class="summary paging-summary">
+              <div class="summary-row">
+                <dt data-copy="usedPages">Used pages</dt>
+                <dd data-field="used-pages">0</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="freePages">Free pages</dt>
+                <dd data-field="free-pages">4</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="logicalBytes">Logical bytes</dt>
+                <dd data-field="logical-bytes">0 B</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="allocatedBytes">Allocated bytes</dt>
+                <dd data-field="allocated-bytes">0 B</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="wasteBytes">Waste bytes</dt>
+                <dd data-field="waste-bytes">0 B</dd>
+              </div>
+              <div class="summary-row">
+                <dt>Capacity</dt>
+                <dd data-field="capacity-bytes">4.0 KiB</dd>
+              </div>
+            </dl>
+            <p class="note">Logical KV bytes, not process RSS or GPU memory. / 这里统计的是逻辑 KV 字节，不是进程 RSS 或显存。</p>
+          </section>
+
+          <section class="panel" id="export-panel" aria-labelledby="export-heading">
+            <h2 id="export-heading" data-copy="exportTitle">Save experiment</h2>
+            <p class="note" data-copy="exportHint">Download the input and paging operations as JSON. The file contains no results.</p>
+            <button id="export-button" type="button" class="secondary" data-copy="exportButton">Download JSON</button>
+            <label for="export-output" class="visually-hidden">Exported experiment document</label>
+            <textarea id="export-output" readonly rows="8" spellcheck="false"></textarea>
+          </section>
+
+          <section class="panel" id="import-panel" aria-labelledby="import-heading">
+            <h2 id="import-heading" data-copy="importTitle">Load experiment</h2>
+            <p class="note" data-copy="importHint">Load a previously exported file. Results are recomputed from the input, never trusted from the file.</p>
+            <label for="import-input" class="visually-hidden">Experiment document to load</label>
+            <textarea id="import-input" rows="8" spellcheck="false"></textarea>
+            <button id="import-button" type="button" class="secondary" data-copy="importButton">Load JSON</button>
+            <p id="import-status" class="status" role="status" aria-live="polite"></p>
+          </section>
+
+          <section class="panel explain-panel" aria-labelledby="explain-heading">
+            <h2 id="explain-heading">Why this is true / 为什么是这样</h2>
+            <div id="explain-en" class="explain">
+              <h3>Reference first</h3>
+              <p>The full-prefix path recomputes every position from scratch. It is the reference: slow, plain and unambiguous.</p>
+              <p>The cached path keeps K/V per layer and appends one slot per token. Both paths must agree at every position, under a tolerance fixed before the run: |a − r| ≤ 1e-5 + 1e-4·|r|.</p>
+              <p>Each fault is injected only into the cached path and is invisible at position 0. A correct lab catches every fault at position 1 or later.</p>
+              <p>Pages hold tokens, not bytes; the paging panel reports logical KV bytes, never process RSS or GPU memory.</p>
+            </div>
+            <div id="explain-zh" class="explain" lang="zh">
+              <h3>先有参照物</h3>
+              <p>全前缀路径每次都从头重算每一个位置。它是参照物：慢、直白、没有歧义。</p>
+              <p>缓存路径按层保存 K/V，每个 token 追加一个槽位。两条路径必须在每个位置一致，容差在运行之前就已固定：|a − r| ≤ 1e-5 + 1e-4·|r|。</p>
+              <p>每种故障只注入缓存路径，并且在位置 0 完全看不出来。正确的实验必须在位置 1 或更晚抓住它。</p>
+              <p>分页面板统计的是逻辑 KV 字节，不是进程 RSS 或显存。</p>
+            </div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <footer class="colophon">
+      <p data-copy="footerNote">Untrained tiny model. This page proves numerical semantics, not model quality, speed or GPU memory.</p>
+    </footer>
+
+    <script type="module" src="./apps/web/src/main.js"></script>
+  </body>
+</html>
