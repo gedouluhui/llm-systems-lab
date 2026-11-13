@@ -48,7 +48,7 @@
 ```bash
 npm install
 npm run build
-npm test                     # 93 个测试，含 130 用例跨语言参考比对
+npm test                     # 94 个测试，含 130 用例跨语言参考比对
 
 # 人读演示：正常路径通过，三种故障都在 position 1 被抓到
 node dist/src/cli.js demo
@@ -170,7 +170,7 @@ npm run e2e:web                                           # 15 个浏览器场�
 
 1. TypeScript 构建
 2. Web 构建：编译浏览器代码，校验 2 MiB 预算、HTML shell 中必需的 CSP 指令与无绝对 URL（这是必需的指令级检查，不是“CSP 无法被削弱”的穷举证明；同源与无控制台错误由浏览器 E2E 单独断言）
-3. 全部 TypeScript 测试（串行，93 个）
+3. 全部 TypeScript 测试（串行，94 个）
 4. Web 测试（3 个文件、17 个用例；零文件或数量下降都会失败）
 5. Python 参考自测
 6. fixture 溯源（源码哈希、模型 ID、schema、用例数）
@@ -252,7 +252,7 @@ Real build, headless Edge 157 at 1280×900; not mockups. Environment and limits 
 ```bash
 npm install
 npm run build
-npm test                     # 93 tests, including the 130-case cross-language comparison
+npm test                     # 94 tests, including the 130-case cross-language comparison
 node dist/src/cli.js demo
 node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9
 node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9 --fault cache-overwrite
@@ -302,7 +302,7 @@ All three are identical to the correct path at position 0, so detection must sho
 
 ### Verification
 
-`scripts/verify.mjs` runs eight stages serially: build, web build, TypeScript tests (93), web tests (17 across three files), Python reference tests, fixture provenance, a six-mutant source-mutation check, and a packed-artifact smoke test. The web build asserts the 2 MiB budget, the required CSP directives in the HTML shell, and the absence of absolute URLs in that shell; it is a required-directive check, not a proof that the policy cannot be weakened later, and the browser E2E separately asserts that every loaded resource is same-origin and that the console is error-free. Web tests fail closed if no web test file exists or the count drops. Missing components or non-zero exits fail the gate; nothing is silently skipped. Mutants count only when the build succeeds and a named test fails. The mutation runner has its own tests covering CAUGHT, MISSED, NOP, BUILD-FAIL, WRONG-FAILURE, non-unique targets, and missing targets. Negative control: `WEB_MAX_BYTES=1 node scripts/verify.mjs` must fail at the web-build stage.
+`scripts/verify.mjs` runs eight stages serially: build, web build, TypeScript tests (94), web tests (17 across three files), Python reference tests, fixture provenance, a six-mutant source-mutation check, and a packed-artifact smoke test. The web build asserts the 2 MiB budget, the required CSP directives in the HTML shell, and the absence of absolute URLs in that shell; it is a required-directive check, not a proof that the policy cannot be weakened later, and the browser E2E separately asserts that every loaded resource is same-origin and that the console is error-free. Web tests fail closed if no web test file exists or the count drops. Missing components or non-zero exits fail the gate; nothing is silently skipped. Mutants count only when the build succeeds and a named test fails. The mutation runner has its own tests covering CAUGHT, MISSED, NOP, BUILD-FAIL, WRONG-FAILURE, non-unique targets, and missing targets. Negative control: `WEB_MAX_BYTES=1 node scripts/verify.mjs` must fail at the web-build stage.
 
 ### Limitations
 
