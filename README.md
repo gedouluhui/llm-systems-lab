@@ -2,6 +2,9 @@
 
 **把“数值正确性”变成可执行证据的小型 LLM 推理系统实验室。**
 
+[![CI](https://github.com/gedouluhui/llm-systems-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/gedouluhui/llm-systems-lab/actions/workflows/ci.yml)
+[在线演示](https://gedouluhui.github.io/llm-systems-lab/) · [GitHub 仓库](https://github.com/gedouluhui/llm-systems-lab)
+
 [中文](#中文) · [English](#english)
 
 ---
@@ -30,7 +33,7 @@
 - 源代码变异检查：6 个变异体全部被指定测试抓住
 - A2 浏览器教学界面：逐位置 capture bar、步骤详情、KV cache 槽位、单请求分页实验、实验文档导出/导入、中英切换、键盘操作、窄屏与减弱动画
 - `scripts/verify.mjs` 八阶段总验收：构建、Web 构建、TypeScript 测试、Web 测试、Python 参考测试、fixture 溯源、变异检查、打包冒烟
-- A3 发布准备：MIT 许可证、CI 与 GitHub Pages 工作流、真实界面截图（仓库与在线演示链接在发布后补充）
+- A3 发布：MIT 许可证、CI 与 GitHub Pages 工作流、真实界面截图；[在线演示](https://gedouluhui.github.io/llm-systems-lab/) 与 [GitHub 仓库](https://github.com/gedouluhui/llm-systems-lab) 均已上线
 
 尚未包含：真实 GPU 显存/吞吐测量、训练或模型质量评估、真实用户测试或用户研究。本项目**不**声称模型能力、性能、视觉质量或学习效果有任何优势。
 
@@ -236,7 +239,7 @@ A pure-accounting KV paging simulator (lowest-free-page allocation, atomic OOM f
 
 ### Status: A3 public beta
 
-Implemented: frozen numerical contract, deterministic weights, full and cached paths, three faults, a 130-case independent fixture, the `run` / `replay` / `demo` CLI, a six-mutant source mutation check, and a static browser lab with a per-position capture bar, step detail, KV cache slots, a single-request paging experiment, experiment export/import, English/Chinese chrome, keyboard operation, narrow layout and reduced motion. The serial `scripts/verify.mjs` gate now has eight stages, including the web build and web tests. A3 release preparation adds the MIT license, CI and GitHub Pages workflows, and real UI screenshots; repository and live-demo links are added after publication.
+Implemented: frozen numerical contract, deterministic weights, full and cached paths, three faults, a 130-case independent fixture, the `run` / `replay` / `demo` CLI, a six-mutant source mutation check, and a static browser lab with a per-position capture bar, step detail, KV cache slots, a single-request paging experiment, experiment export/import, English/Chinese chrome, keyboard operation, narrow layout and reduced motion. The serial `scripts/verify.mjs` gate now has eight stages, including the web build and web tests. A3 release adds the MIT license, CI and GitHub Pages workflows, and real UI screenshots. The [live demo](https://gedouluhui.github.io/llm-systems-lab/) and the [repository](https://github.com/gedouluhui/llm-systems-lab) are published.
 
 Not included: training or model-quality evaluation, real GPU memory/throughput measurement, real user testing or user studies. The project makes no claim of model quality, speed, visual quality or learning effectiveness.
 
