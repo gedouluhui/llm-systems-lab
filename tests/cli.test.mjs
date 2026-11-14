@@ -43,6 +43,24 @@ test('CLI run exits 1 for numerical divergence while still emitting JSON', () =>
   assert.equal(report.comparison.firstDivergence, 1);
 });
 
+test('CLI run exposes no-cache recompute as passing numerics with degraded work', () => {
+  const result = runCli([
+    'run', '--seed', '7', '--tokens', '1,4,2,8,3,9', '--fault', 'no-cache-recompute',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.comparison.passes, true);
+  assert.equal(report.comparison.firstDivergence, null);
+  assert.deepEqual(report.workSummary, {
+    totalRecomputeTokens: 21,
+    expectedCachedTokens: 6,
+    totalKvReadSlots: 112,
+    totalAttentionMacs: 3584,
+    complexityClass: 'O(T^2) step / O(T^3) total',
+  });
+});
+
 test('CLI run rejects malformed arguments with exit code 2 and empty stdout', () => {
   const cases = [
     [],
@@ -140,5 +158,9 @@ test('CLI demo validates normal execution and every advertised fault', () => {
   for (const fault of ['position-offset', 'cache-overwrite', 'mask-current-only']) {
     assert.match(result.stdout, new RegExp(`${fault}: DIVERGED at position [1-9][0-9]*`), fault);
   }
+  assert.match(
+    result.stdout,
+    /no-cache-recompute: PASS numerically, work O\(T\^2\) step \/ O\(T\^3\) total \(21 recomputed tokens vs 6 cached steps\)/,
+  );
   assert.match(result.stdout, /result: PASS/);
 });

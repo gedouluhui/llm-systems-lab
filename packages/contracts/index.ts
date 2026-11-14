@@ -1,4 +1,9 @@
-export type FaultMode = 'none' | 'position-offset' | 'cache-overwrite' | 'mask-current-only';
+export type FaultMode =
+  | 'none'
+  | 'position-offset'
+  | 'cache-overwrite'
+  | 'mask-current-only'
+  | 'no-cache-recompute';
 
 export type LabErrorCode = 'INPUT' | 'CONTEXT_LIMIT' | 'NON_FINITE' | 'OOM';
 
@@ -26,6 +31,7 @@ export const FAULTS: readonly FaultMode[] = Object.freeze([
   'position-offset',
   'cache-overwrite',
   'mask-current-only',
+  'no-cache-recompute',
 ] as const);
 
 const INPUT_KEYS = ['schemaVersion', 'seed', 'tokens', 'fault'] as const;

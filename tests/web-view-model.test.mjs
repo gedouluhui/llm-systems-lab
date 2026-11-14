@@ -32,6 +32,24 @@ test('summary reports the real comparison, never a hardcoded pass', async () => 
   assert.equal(summary.stepsCompared, 6);
   assert.equal(summary.fingerprintShort, '75384d2cbebc…');
   assert.ok(Number.isFinite(summary.maxAbsoluteError));
+  assert.equal(summary.totalRecomputeTokens, 6);
+  assert.equal(summary.expectedCachedTokens, 6);
+  assert.equal(summary.complexityClass, 'O(T) step / O(T^2) total');
+  assert.equal(summary.degraded, false);
+});
+
+test('summary flags no-cache recompute as numerically passing with a work warning', async () => {
+  const degraded = await runExperiment({ ...base, fault: 'no-cache-recompute' });
+  const summary = summarizeRun(degraded);
+  assert.equal(summary.passes, true);
+  assert.equal(summary.firstDivergence, null);
+  assert.equal(summary.totalRecomputeTokens, 21);
+  assert.equal(summary.expectedCachedTokens, 6);
+  assert.equal(summary.complexityClass, 'O(T^2) step / O(T^3) total');
+  assert.equal(summary.degraded, true);
+  const masked = summarizeRun(await runExperiment({ ...base, fault: 'mask-current-only' }));
+  assert.equal(masked.complexityClass, 'O(1) masked');
+  assert.equal(masked.degraded, false);
 });
 
 test('a fault run exposes divergence at position 1 and overwrite marks', async () => {

@@ -3,7 +3,13 @@ import test from 'node:test';
 import * as contracts from '../dist/packages/contracts/index.js';
 
 const validInput = () => ({ schemaVersion: 1, seed: 0, tokens: [0, 31], fault: 'none' });
-const faults = ['none', 'position-offset', 'cache-overwrite', 'mask-current-only'];
+const faults = [
+  'none',
+  'position-offset',
+  'cache-overwrite',
+  'mask-current-only',
+  'no-cache-recompute',
+];
 
 function api(name) {
   assert.equal(typeof contracts[name], 'function', `${name} must be available`);

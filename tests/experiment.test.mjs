@@ -136,6 +136,39 @@ test('a cache-only mismatch is attributed to the last token position', () => {
   assert.equal(resolveFirstDivergence(0, false, 1), 0);
 });
 
+test('workSummary reports deterministic counts for normal, masked and recompute modes', async () => {
+  const normal = await runExperiment(normalInput());
+  assert.deepEqual(normal.workSummary, {
+    totalRecomputeTokens: 6,
+    expectedCachedTokens: 6,
+    totalKvReadSlots: 2 * 21,
+    totalAttentionMacs: 2 * 8 * 2 * 2 * 21,
+    complexityClass: 'O(T) step / O(T^2) total',
+  });
+  assert.deepEqual(normal.steps.map((step) => step.work.recomputeTokens), [1, 1, 1, 1, 1, 1]);
+
+  const masked = await runExperiment({ ...normalInput(), fault: 'mask-current-only' });
+  assert.deepEqual(masked.workSummary, {
+    totalRecomputeTokens: 6,
+    expectedCachedTokens: 6,
+    totalKvReadSlots: 2 * 6,
+    totalAttentionMacs: 2 * 8 * 2 * 2 * 6,
+    complexityClass: 'O(1) masked',
+  });
+
+  const degraded = await runExperiment({ ...normalInput(), fault: 'no-cache-recompute' });
+  assert.equal(degraded.comparison.passes, true, 'recompute mode is numerically exact');
+  assert.equal(degraded.comparison.firstDivergence, null);
+  assert.deepEqual(degraded.steps.map((step) => step.work.recomputeTokens), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(degraded.workSummary, {
+    totalRecomputeTokens: 21,
+    expectedCachedTokens: 6,
+    totalKvReadSlots: 2 * 56,
+    totalAttentionMacs: 2 * 8 * 2 * 2 * 56,
+    complexityClass: 'O(T^2) step / O(T^3) total',
+  });
+});
+
 test('runExperiment derives divergence from computed vectors for every teaching fault', async () => {
   const tokens = [1, 4, 2, 8, 3, 9];
   const normal = await runExperiment({ schemaVersion: 1, seed: 7, tokens, fault: 'none' });

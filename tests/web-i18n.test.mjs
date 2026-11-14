@@ -6,8 +6,11 @@ import { COPY, formatCopy } from '../apps/web/dist/apps/web/src/i18n.js';
 const REQUIRED_KEYS = [
   'appTitle', 'tagline', 'modelLabel', 'seedLabel', 'tokensLabel', 'faultLabel',
   'faultNone', 'faultPositionOffset', 'faultCacheOverwrite', 'faultMaskCurrentOnly',
+  'faultNoCacheRecompute',
   'runButton', 'running', 'pass', 'diverged', 'statusLabel', 'summaryTitle',
   'detailTitle', 'firstDivergence', 'maxAbs', 'maxRel',
+  'workClass', 'workTokens', 'workKvReads', 'workAttention', 'workHint',
+  'workOk', 'workDegraded',
   'fingerprint', 'engine', 'captureTitle', 'captureHint', 'stepTitle', 'stepHint',
   'cacheTitle', 'cacheHint', 'layerLabel', 'slotLabel', 'readCount', 'overwritten',
   'pagingTitle', 'pagingHint', 'pageSize', 'pageCount', 'requestId', 'appendTokens',

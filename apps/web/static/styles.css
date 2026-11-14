@@ -174,6 +174,16 @@ main {
   font-size: 0.82rem;
 }
 
+.work-note {
+  border-left: 2px solid var(--ok);
+  padding-left: 0.5rem;
+}
+
+.work-note[data-state="degraded"] {
+  border-left-color: var(--amber);
+  color: var(--amber);
+}
+
 .field {
   display: grid;
   gap: 0.25rem;

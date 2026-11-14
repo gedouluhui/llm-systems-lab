@@ -18,6 +18,15 @@ export interface CacheEvent {
   overwrittenSlot: number | null;
 }
 
+export interface StepWorkStats {
+  /** Cached or recomputed attention slots read across every layer this step. */
+  kvReadSlots: number;
+  /** Tokens that went through QKV projection this step (1 normally, prefix length when recomputing). */
+  recomputeTokens: number;
+  /** Deterministic multiply-add count for attention, derived from kvReadSlots. */
+  attentionMacs: number;
+}
+
 export interface FullForwardResult {
   logits: Float32Array;
   hidden: Float32Array[];
@@ -30,7 +39,15 @@ export interface StepResult {
   logits: Float32Array;
   hidden: Float32Array[];
   cacheEvents: CacheEvent[];
+  work: StepWorkStats;
 }
+
+/**
+ * Every (query, key) pair costs one headDim dot product for the score and one
+ * headDim weighted sum of V, so one KV slot contributes this many MACs per
+ * layer for all heads together.
+ */
+const MACS_PER_KV_SLOT = 2 * MODEL_SPEC.headDim * MODEL_SPEC.numHeads;
 
 function normalizeRows(state: Float32Array, rows: number, width: number): Float32Array {
   const normalized = new Float32Array(rows * width);
@@ -167,6 +184,7 @@ export class CachedDecoder {
   private readonly fault: FaultMode;
   private readonly keys: Float32Array[];
   private readonly values: Float32Array[];
+  private readonly history: number[] = [];
   private count = 0;
 
   constructor(model: Model, ...options: [unknown?]) {
@@ -199,6 +217,50 @@ export class CachedDecoder {
     const headDim = MODEL_SPEC.headDim;
     const numHeads = MODEL_SPEC.numHeads;
     const scale = Math.sqrt(headDim);
+    const layerCount = this.model.layers.length;
+
+    if (this.fault === 'no-cache-recompute') {
+      // Numerically exact by construction: re-run the full-prefix reference
+      // path and report its last row. The mirror cache is refreshed so
+      // snapshot() still describes the same state a cached run would hold.
+      const history = [...this.history, checked];
+      const full = fullForward(this.model, history);
+      const rowOffset = position * width;
+      const logits = full.logits.slice(
+        position * MODEL_SPEC.vocabSize,
+        (position + 1) * MODEL_SPEC.vocabSize,
+      );
+      const hiddenLayers = full.hidden.map((layer) =>
+        layer.slice(rowOffset, rowOffset + width));
+      const readSlots = Array.from({ length: position + 1 }, (_, index) => index);
+      const events: CacheEvent[] = [];
+      for (let layerIndex = 0; layerIndex < layerCount; layerIndex += 1) {
+        this.keys[layerIndex]!.set(full.cache[layerIndex]!.keys, 0);
+        this.values[layerIndex]!.set(full.cache[layerIndex]!.values, 0);
+        events.push({
+          layer: layerIndex,
+          writeSlot: position,
+          readSlots: [...readSlots],
+          overwrittenSlot: null,
+        });
+      }
+      const kvReadSlots = layerCount * ((position + 1) * (position + 2)) / 2;
+      this.count = position + 1;
+      this.history.push(checked);
+      return {
+        position,
+        token: checked,
+        logits,
+        hidden: hiddenLayers,
+        cacheEvents: events,
+        work: {
+          recomputeTokens: position + 1,
+          kvReadSlots,
+          attentionMacs: MACS_PER_KV_SLOT * kvReadSlots,
+        },
+      };
+    }
+
     const positionIndex =
       this.fault === 'position-offset' && position > 0
         ? (position + 1) % MODEL_SPEC.maxContext
@@ -307,8 +369,24 @@ export class CachedDecoder {
       cacheValues.set(item.values, position * width);
     }
     this.count = position + 1;
+    this.history.push(checked);
 
-    return { position, token: checked, logits, hidden: hiddenLayers, cacheEvents: events };
+    let kvReadSlots = 0;
+    for (const event of events) {
+      kvReadSlots += event.readSlots.length;
+    }
+    return {
+      position,
+      token: checked,
+      logits,
+      hidden: hiddenLayers,
+      cacheEvents: events,
+      work: {
+        recomputeTokens: 1,
+        kvReadSlots,
+        attentionMacs: MACS_PER_KV_SLOT * kvReadSlots,
+      },
+    };
   }
 
   snapshot(): CacheSnapshotLayer[] {
@@ -327,6 +405,7 @@ export class CachedDecoder {
 
   reset(): void {
     this.count = 0;
+    this.history.length = 0;
     for (const keys of this.keys) {
       keys.fill(0);
     }

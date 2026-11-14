@@ -188,6 +188,17 @@ async function commandDemo(args: readonly string[]): Promise<number> {
       tokens: [...DEMO_TOKENS],
       fault,
     });
+    if (fault === 'no-cache-recompute') {
+      const degraded = result.comparison.passes
+        && result.workSummary.totalRecomputeTokens > result.workSummary.expectedCachedTokens;
+      ok = ok && degraded;
+      lines.push(
+        `no-cache-recompute: PASS numerically, work ${result.workSummary.complexityClass} `
+        + `(${result.workSummary.totalRecomputeTokens} recomputed tokens vs `
+        + `${result.workSummary.expectedCachedTokens} cached steps)`,
+      );
+      continue;
+    }
     const diverged = !result.comparison.passes && result.comparison.firstDivergence !== null;
     ok = ok && diverged;
     lines.push(

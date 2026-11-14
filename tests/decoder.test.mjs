@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CachedDecoder, createModel, fullForward } from '../dist/packages/core/index.js';
-import { LabError } from '../dist/packages/contracts/index.js';
+import { LabError, MODEL_SPEC } from '../dist/packages/contracts/index.js';
 
 const MODEL = createModel(7);
 const TOKENS = [1, 4, 2, 8, 3, 9];
@@ -221,4 +221,78 @@ test('a fresh normal decoder recovers after faulty runs', () => {
   for (const [position, step] of recovered.entries()) {
     closeRows(step.logits, reference.logits, position * 32, 32, `recovered@${position}`);
   }
+});
+
+const MACS_PER_SLOT = 2 * MODEL_SPEC.headDim * MODEL_SPEC.numHeads;
+
+test('work ledger counts cached reads and attention multiply-adds deterministically', () => {
+  const decoder = new CachedDecoder(MODEL);
+  for (const [position, token] of TOKENS.entries()) {
+    const step = decoder.step(token);
+    assert.deepEqual(step.work, {
+      recomputeTokens: 1,
+      kvReadSlots: MODEL_SPEC.numLayers * (position + 1),
+      attentionMacs: MACS_PER_SLOT * MODEL_SPEC.numLayers * (position + 1),
+    }, `normal work at ${position}`);
+  }
+  const masked = new CachedDecoder(MODEL, 'mask-current-only');
+  for (const [position, token] of TOKENS.entries()) {
+    const step = masked.step(token);
+    assert.deepEqual(step.work, {
+      recomputeTokens: 1,
+      kvReadSlots: MODEL_SPEC.numLayers,
+      attentionMacs: MACS_PER_SLOT * MODEL_SPEC.numLayers,
+    }, `masked work at ${position}`);
+  }
+});
+
+test('no-cache-recompute is numerically exact yet bills every prefix token', () => {
+  const reference = fullForward(MODEL, TOKENS);
+  const decoder = new CachedDecoder(MODEL, 'no-cache-recompute');
+  for (const [position, token] of TOKENS.entries()) {
+    const step = decoder.step(token);
+    assert.deepEqual(
+      step.logits,
+      reference.logits.subarray(position * 32, (position + 1) * 32),
+      `exact logits at ${position}`,
+    );
+    for (let layer = 0; layer < MODEL_SPEC.numLayers; layer += 1) {
+      assert.deepEqual(
+        step.hidden[layer],
+        reference.hidden[layer].subarray(position * 16, (position + 1) * 16),
+        `exact hidden${layer} at ${position}`,
+      );
+      assert.equal(step.cacheEvents[layer].writeSlot, position);
+      assert.deepEqual(
+        step.cacheEvents[layer].readSlots,
+        Array.from({ length: position + 1 }, (_, index) => index),
+      );
+      assert.equal(step.cacheEvents[layer].overwrittenSlot, null);
+    }
+    const prefixSlots = ((position + 1) * (position + 2)) / 2;
+    assert.deepEqual(step.work, {
+      recomputeTokens: position + 1,
+      kvReadSlots: MODEL_SPEC.numLayers * prefixSlots,
+      attentionMacs: MACS_PER_SLOT * MODEL_SPEC.numLayers * prefixSlots,
+    }, `recompute work at ${position}`);
+  }
+  const snapshot = decoder.snapshot();
+  for (let layer = 0; layer < MODEL_SPEC.numLayers; layer += 1) {
+    assert.equal(snapshot[layer].length, TOKENS.length);
+    assert.deepEqual(snapshot[layer].keys, reference.cache[layer].keys);
+    assert.deepEqual(snapshot[layer].values, reference.cache[layer].values);
+  }
+});
+
+test('reset clears the recompute history so no-cache steps restart from one token', () => {
+  const decoder = new CachedDecoder(MODEL, 'no-cache-recompute');
+  for (const token of TOKENS) decoder.step(token);
+  decoder.reset();
+  const first = decoder.step(1);
+  assert.deepEqual(first.work, {
+    recomputeTokens: 1,
+    kvReadSlots: MODEL_SPEC.numLayers,
+    attentionMacs: MACS_PER_SLOT * MODEL_SPEC.numLayers,
+  });
+  assert.equal(decoder.length, 1);
 });

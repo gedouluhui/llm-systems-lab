@@ -3,8 +3,9 @@ import {
   MODEL_SPEC,
   validateInput,
   type ExperimentInput,
+  type FaultMode,
 } from '../contracts/index.js';
-import { CachedDecoder, fullForward, type CacheEvent, type CacheSnapshotLayer } from './decoder.js';
+import { CachedDecoder, fullForward, type CacheEvent, type CacheSnapshotLayer, type StepWorkStats } from './decoder.js';
 import { createModel, weightsFingerprint } from './model.js';
 
 export const ENGINE_VERSION = '0.1.0-a1';
@@ -32,6 +33,21 @@ export interface ExperimentStep {
   logits: VectorComparison;
   hidden: LayerComparison[];
   cacheEvents: CacheEvent[];
+  work: StepWorkStats;
+}
+
+export type ComplexityClass =
+  | 'O(T) step / O(T^2) total'
+  | 'O(T^2) step / O(T^3) total'
+  | 'O(1) masked';
+
+export interface ExperimentWorkSummary {
+  totalRecomputeTokens: number;
+  /** One token is cached per step, so this equals stepsCompared. */
+  expectedCachedTokens: number;
+  totalKvReadSlots: number;
+  totalAttentionMacs: number;
+  complexityClass: ComplexityClass;
 }
 
 export interface ExperimentComparison {
@@ -72,6 +88,7 @@ export interface ExperimentResult {
   tolerances: { atol: number; rtol: number };
   steps: ExperimentStep[];
   comparison: ExperimentComparison;
+  workSummary: ExperimentWorkSummary;
   finalCache: FinalCacheLayer[];
 }
 
@@ -193,6 +210,28 @@ function copyCacheEvent(event: CacheEvent): CacheEvent {
   };
 }
 
+function copyWork(work: StepWorkStats): StepWorkStats {
+  return {
+    recomputeTokens: work.recomputeTokens,
+    kvReadSlots: work.kvReadSlots,
+    attentionMacs: work.attentionMacs,
+  };
+}
+
+/**
+ * The asymptotic class of the mode, fixed in advance. The measured ledger is
+ * the evidence; this label never changes because a sample happened to be short.
+ */
+function complexityFor(fault: FaultMode): ComplexityClass {
+  if (fault === 'no-cache-recompute') {
+    return 'O(T^2) step / O(T^3) total';
+  }
+  if (fault === 'mask-current-only') {
+    return 'O(1) masked';
+  }
+  return 'O(T) step / O(T^2) total';
+}
+
 /**
  * Maps per-step and final-cache comparisons to the reported divergence
  * position. A final-cache-only mismatch belongs to the last token, because the
@@ -228,6 +267,9 @@ export async function runExperiment(input: unknown): Promise<ExperimentResult> {
   let firstDivergence: number | null = null;
   let maxAbsoluteError = 0;
   let maxRelativeError = 0;
+  let totalRecomputeTokens = 0;
+  let totalKvReadSlots = 0;
+  let totalAttentionMacs = 0;
 
   for (let position = 0; position < validated.tokens.length; position += 1) {
     const step = decoder.step(validated.tokens[position]);
@@ -248,6 +290,10 @@ export async function runExperiment(input: unknown): Promise<ExperimentResult> {
       maxAbsoluteError = Math.max(maxAbsoluteError, comparison.maxAbsoluteError);
       maxRelativeError = Math.max(maxRelativeError, comparison.maxRelativeError);
     }
+    const work = copyWork(step.work);
+    totalRecomputeTokens += work.recomputeTokens;
+    totalKvReadSlots += work.kvReadSlots;
+    totalAttentionMacs += work.attentionMacs;
     steps.push({
       position,
       token: step.token,
@@ -256,6 +302,7 @@ export async function runExperiment(input: unknown): Promise<ExperimentResult> {
       logits,
       hidden,
       cacheEvents: step.cacheEvents.map(copyCacheEvent),
+      work,
     });
   }
 
@@ -287,6 +334,13 @@ export async function runExperiment(input: unknown): Promise<ExperimentResult> {
       maxAbsoluteError,
       maxRelativeError,
       cache,
+    },
+    workSummary: {
+      totalRecomputeTokens,
+      expectedCachedTokens: steps.length,
+      totalKvReadSlots,
+      totalAttentionMacs,
+      complexityClass: complexityFor(validated.fault),
     },
     finalCache: snapshot.map((layer, index) => ({
       layer: index,

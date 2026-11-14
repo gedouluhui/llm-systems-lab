@@ -15,6 +15,7 @@ export const SECTIONS = [
   'baseline',
   'input',
   'fault',
+  'work',
   'step',
   'cache',
   'paging',
@@ -198,20 +199,25 @@ export function createCdp(wsUrl) {
   });
 }
 
-function findBrowser() {
+function browserCandidates() {
   const override = process.env.LAB_BROWSER;
+  const candidates = [];
   if (typeof override === 'string' && override.trim().length > 0) {
     if (!existsSync(override)) {
       throw new Error(`LAB_BROWSER does not exist: ${override}`);
     }
-    return override;
-  }
-  for (const candidate of BROWSER_CANDIDATES) {
-    if (existsSync(candidate)) {
-      return candidate;
+    candidates.push(override);
+  } else {
+    for (const candidate of BROWSER_CANDIDATES) {
+      if (existsSync(candidate)) {
+        candidates.push(candidate);
+      }
     }
   }
-  throw new Error('No Edge or Chrome found; set LAB_BROWSER to a browser executable');
+  if (candidates.length === 0) {
+    throw new Error('No Edge or Chrome found; set LAB_BROWSER to a browser executable');
+  }
+  return candidates;
 }
 
 async function waitForDevToolsPort(profile, child) {
@@ -307,10 +313,10 @@ export async function runE2E(options = {}) {
 
   mkdirSync(ARTIFACTS, { recursive: true });
   buildWeb();
-  const browser = findBrowser();
-  const profile = mkdtempSync(path.join(tmpdir(), 'llm-systems-lab-e2e-'));
+  const candidates = browserCandidates();
   const results = [];
   const screenshots = [];
+  let profile = '';
   let child = null;
   let server = null;
   let cdp = null;
@@ -322,18 +328,44 @@ export async function runE2E(options = {}) {
   const externalRequests = [];
 
   try {
-    child = spawn(browser, [
-      '--headless=new',
-      '--disable-gpu',
-      '--hide-scrollbars',
-      '--no-first-run',
-      '--no-default-browser-check',
-      `--user-data-dir=${profile}`,
-      '--remote-debugging-port=0',
-      'about:blank',
-    ], { stdio: 'ignore', windowsHide: true });
+    let port = null;
+    const launchErrors = [];
+    for (const candidate of candidates) {
+      const attemptProfile = mkdtempSync(path.join(tmpdir(), 'llm-systems-lab-e2e-'));
+      const attempt = spawn(candidate, [
+        '--headless=new',
+        '--disable-gpu',
+        '--hide-scrollbars',
+        '--no-first-run',
+        '--no-default-browser-check',
+        `--user-data-dir=${attemptProfile}`,
+        '--remote-debugging-port=0',
+        'about:blank',
+      ], { stdio: 'ignore', windowsHide: true });
+      try {
+        const ready = await waitForDevToolsPort(attemptProfile, attempt);
+        profile = attemptProfile;
+        child = attempt;
+        port = ready.port;
+        break;
+      } catch (error) {
+        launchErrors.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+        const exited = await waitForChildExit(attempt, 3000);
+        if (!exited) {
+          try {
+            attempt.kill();
+          } catch {
+            // Already gone.
+          }
+          await waitForChildExit(attempt, 2000);
+        }
+        await removeProfile(attemptProfile);
+      }
+    }
+    if (port === null) {
+      throw new Error(`no browser produced a DevTools port: ${launchErrors.join(' | ')}`);
+    }
 
-    const { port } = await waitForDevToolsPort(profile, child);
     const page = await fetchPageTarget(port);
     cdp = await createCdp(page.webSocketDebuggerUrl);
 
@@ -659,6 +691,50 @@ export async function runE2E(options = {}) {
         const lamp = await runWithValidInput({ tokens: '1,4,2,8,3,9', seed: 7, fault: 'none' });
         await expect(lamp === 'pass', 'baseline did not return to PASS');
         return 'all three teaching faults caught at position 1 or later';
+      },
+
+      async work() {
+        await setFault('no-cache-recompute');
+        const teaching = await text('#fault-teaching');
+        await expect(teaching !== null && teaching.includes('No-cache recompute'),
+          `fault teaching did not follow the fifth mode: ${teaching}`);
+        const lamp = await runWithValidInput({ tokens: '1,4,2,8,3,9', seed: 7, fault: 'no-cache-recompute' });
+        await expect(lamp === 'pass', `no-cache recompute did not pass numerically: ${lamp}`);
+        const result = await lastResult();
+        await expect(result !== null && result.input.fault === 'no-cache-recompute',
+          'no-cache recompute result missing');
+        await expect(result.comparison.passes === true && result.comparison.firstDivergence === null,
+          'no-cache recompute diverged numerically');
+        await expect(result.workSummary.totalRecomputeTokens === 21,
+          `no-cache ledger recomputed ${result.workSummary.totalRecomputeTokens} tokens`);
+        await expect(await text('#summary [data-field="work-class"]') === 'O(T^2) step / O(T^3) total',
+          `no-cache complexity row: ${await text('#summary [data-field="work-class"]')}`);
+        await expect(await text('#summary [data-field="work-tokens"]') === '21 / 6',
+          `no-cache token ledger: ${await text('#summary [data-field="work-tokens"]')}`);
+        await expect(await text('#summary [data-field="work-kv"]') === '112',
+          `no-cache KV row: ${await text('#summary [data-field="work-kv"]')}`);
+        await expect(await text('#summary [data-field="work-attention"]') === '3584',
+          `no-cache attention row: ${await text('#summary [data-field="work-attention"]')}`);
+        await expect(await attr('#work-note', 'data-state') === 'degraded',
+          'work note did not flag the degraded path');
+        const note = await text('#work-note');
+        await expect(note !== null && /bypassed/i.test(note), `work note text: ${note}`);
+        await evaluate("document.querySelector('#summary')?.scrollIntoView({ block: 'center' })");
+        await delay(120);
+        await screenshot('work-no-cache.png');
+        const clean = await runWithValidInput({ tokens: '1,4,2,8,3,9', seed: 7, fault: 'none' });
+        await expect(clean === 'pass', `baseline after no-cache did not pass: ${clean}`);
+        await expect(await text('#summary [data-field="work-class"]') === 'O(T) step / O(T^2) total',
+          'cached baseline did not report the cached complexity class');
+        await expect(await text('#summary [data-field="work-tokens"]') === '6 / 6',
+          'cached baseline token ledger is wrong');
+        await expect(await text('#summary [data-field="work-kv"]') === '42',
+          'cached baseline KV ledger is wrong');
+        await expect(await text('#summary [data-field="work-attention"]') === '1344',
+          'cached baseline attention ledger is wrong');
+        await expect(await attr('#work-note', 'data-state') === 'ok',
+          'work note did not return to the cached verdict');
+        return 'no-cache recompute passes numerically while the work ledger flags the O(T^2) degradation';
       },
 
       async step() {
@@ -1185,7 +1261,9 @@ export async function runE2E(options = {}) {
     if (server !== null) {
       await closeServer(server);
     }
-    await removeProfile(profile);
+    if (profile.length > 0) {
+      await removeProfile(profile);
+    }
   }
 
   const summary = summarizeReport(requested, results);

@@ -99,6 +99,7 @@ const statusWord = required<HTMLSpanElement>('status-word');
 const faultTeaching = required<HTMLParagraphElement>('fault-teaching');
 const captureBar = required<HTMLDivElement>('capture');
 const summary = required<HTMLElement>('summary');
+const workNote = required<HTMLParagraphElement>('work-note');
 const stepTableBody = required<HTMLTableSectionElement>('step-table').querySelector('tbody');
 const stepDetail = required<HTMLDivElement>('step-detail');
 const pageSizeInput = required<HTMLInputElement>('page-size');
@@ -127,6 +128,7 @@ const FAULT_COPY = {
   'position-offset': 'faultPositionOffset',
   'cache-overwrite': 'faultCacheOverwrite',
   'mask-current-only': 'faultMaskCurrentOnly',
+  'no-cache-recompute': 'faultNoCacheRecompute',
 } as const;
 
 function checkedFault(): FaultMode {
@@ -182,6 +184,15 @@ function renderSummary(result: ExperimentResult, runMs: number): void {
   setText('[data-field="fingerprint"]', summaryValues.fingerprintShort);
   setText('[data-field="engine"]', summaryValues.engineVersion);
   setText('[data-field="compute"]', `${formatNumber(runMs)} ms`);
+  setText('[data-field="work-class"]', summaryValues.complexityClass);
+  setText(
+    '[data-field="work-tokens"]',
+    `${formatNumber(summaryValues.totalRecomputeTokens)} / ${formatNumber(summaryValues.expectedCachedTokens)}`,
+  );
+  setText('[data-field="work-kv"]', formatNumber(summaryValues.totalKvReadSlots));
+  setText('[data-field="work-attention"]', formatNumber(summaryValues.totalAttentionMacs));
+  workNote.textContent = summaryValues.degraded ? copy.workDegraded : copy.workOk;
+  workNote.dataset.state = summaryValues.degraded ? 'degraded' : 'ok';
 }
 
 function buildMark(kind: 'write' | 'read' | 'overwrite', layer: number, detail: string): HTMLSpanElement {

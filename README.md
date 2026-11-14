@@ -17,7 +17,7 @@
 
 1. **数值语义**：TypeScript 实现必须与一份独立的 Python/NumPy 参考实现在 130 个保留用例上逐元素一致（logits、每层 hidden、每层 KV cache）。
 2. **KV cache**：同一个模型分别走“全前缀重算”和“增量缓存”两条路径，逐位置比较；容差是固定契约，不是事后调出来的。
-3. **故障注入**：三种教学故障只注入缓存路径。验收要求正常路径通过，且每种故障都在第 1 个非零位置之后被抓住。
+3. **故障注入**：三种分歧故障只注入缓存路径。验收要求正常路径通过，且每种故障都在第 1 个非零位置之后被抓住。第四种模式 `no-cache-recompute` 是对照组：它必须在数值上通过，同时由确定性工作量台账证明缓存确实被绕过。
 
 此外提供一个**纯逻辑**的 KV 分页模拟器（按页分配、最低空闲页优先、OOM 原子失败），用于解释分页浪费与碎片，不冒充真实 GPU 测量。
 
@@ -27,7 +27,7 @@
 
 - 冻结的数值契约与确定性权重生成
 - 全前缀路径、增量缓存路径、逐位置比较
-- 三种故障注入
+- 三种分歧故障注入，外加 `no-cache-recompute` 精确对照与确定性工作量台账
 - 130 用例的独立 NumPy 参考 fixture
 - CLI：`run` / `replay` / `demo`
 - 源代码变异检查：6 个变异体全部被指定测试抓住
@@ -51,16 +51,16 @@
 ```bash
 npm install
 npm run build
-npm test                     # 94 个测试，含 130 用例跨语言参考比对
+npm test                     # 100 个测试，含 130 用例跨语言参考比对
 
-# 人读演示：正常路径通过，三种故障都在 position 1 被抓到
+# 人读演示：正常路径通过，三种分歧故障都在 position 1 被抓到
 node dist/src/cli.js demo
 
 # 构建并打开静态教学界面（两个终端）
 node scripts/build-web.mjs
 node scripts/serve-web.mjs   # http://127.0.0.1:4173
 
-# 浏览器端 E2E：15 个场景，使用隔离的临时浏览器配置
+# 浏览器端 E2E：16 个场景，使用隔离的临时浏览器配置
 npm run e2e:web
 ```
 
@@ -75,6 +75,7 @@ normal: PASS (firstDivergence=null)
 position-offset: DIVERGED at position 1
 cache-overwrite: DIVERGED at position 1
 mask-current-only: DIVERGED at position 1
+no-cache-recompute: PASS numerically, work O(T^2) step / O(T^3) total (21 recomputed tokens vs 6 cached steps)
 result: PASS (numerical path only; not model quality, speed, or GPU memory)
 ```
 
@@ -103,6 +104,7 @@ node dist/src/cli.js replay report.json
 3. **KV cache 槽位视图**：两层各自的槽位状态，区分已写、已读、被覆盖。
 4. **单请求分页实验**：追加/释放请求，观察页占用、逻辑字节、已分配字节与浪费字节；OOM 原子失败，不产生部分分配。
 5. **实验文档**：导出的 JSON 只含输入与分页操作，不含结果；导入时重新计算，并拒绝未知字段、超限文档和无效分页操作。
+6. **结果摘要与工作量台账**：同时显示比较结论、首偏差、误差、复杂度等级和三项工作量计数；`no-cache-recompute` 会被明确标注为“数值通过但缓存被绕过”。
 
 界面限制：最多 64 个 token、导入文档最多 256 KiB、分页操作日志最多 1000 条（实时操作与导入文档使用同一上限）。界面文案以英文为主，可切换中文；解释区始终同时给出中英文。所有动态文本使用 `textContent`，导入数据不会作为 HTML 执行。页内显示的耗时是 JavaScript 计算时间，不是 GPU 时间。
 
@@ -122,7 +124,7 @@ node dist/src/cli.js replay report.json
 
 **这不是训练项目。** 权重未训练，数值一致性验证的是系统语义，不是模型质量。
 
-### 三种教学故障
+### 四种教学故障与工作量台账
 
 | 故障 | 缓存路径中的行为 | 模拟的真实缺陷 |
 |---|---|---|
@@ -130,8 +132,11 @@ node dist/src/cli.js replay report.json
 | `position-offset` | 位置 0 之后读取 `(pos + 1) mod 64` 的位置嵌入 | 位置编码差一 |
 | `cache-overwrite` | 位置 0 之后、追加前先覆盖 0 号槽的 K/V | 槽位别名 / 环形缓冲越界 |
 | `mask-current-only` | 注意力只能看到最新一个槽 | 因果掩码或窗口写错 |
+| `no-cache-recompute` | 每步用全前缀引擎重算整个前缀并镜像缓存 | 缓存被绕过：数值正确但代价爆炸 |
 
-三种故障在 position 0 与正确路径完全相同，因此验收必须看到 `firstDivergence >= 1`；只在第 0 步比较的实现会漏掉全部三种故障。
+前三种故障在 position 0 与正确路径完全相同，因此验收必须看到 `firstDivergence >= 1`；只在第 0 步比较的实现会漏掉它们。
+
+`no-cache-recompute` 是对照组：它的数值结果必须与正确路径一致（`passes === true`），但会触发确定性工作量台账告警。每步报告 `kvReadSlots`、`recomputeTokens`、`attentionMacs` 三个整数；实验级汇总给出 `totalRecomputeTokens`、`expectedCachedTokens`、`totalKvReadSlots`、`totalAttentionMacs` 与固定的 `complexityClass`（`O(T) step / O(T^2) total`、`O(1) masked` 或 `O(T^2) step / O(T^3) total`）。这些计数只由位置与层数推出，任何平台都相同，不含墙钟时间。CLI、Web 摘要与 API 同时呈现“数值通过性”和“复杂度等级”两轴，避免用单一通过/失败掩盖缓存是否真的被使用。
 
 ### 独立参考与 fixture
 
@@ -166,15 +171,16 @@ snapshot.wasteBytes;        // 3840
 python -m unittest discover -s reference -p "test_*.py"   # 18 个 NumPy 自测
 node scripts/mutation-check.mjs                           # 6/6 变异体被抓住
 node scripts/verify.mjs                                   # 八阶段串行总验收
-npm run e2e:web                                           # 15 个浏览器场景
+# 浏览器端 E2E：16 个场景，使用隔离的临时浏览器配置
+npm run e2e:web
 ```
 
 `scripts/verify.mjs` 依次执行八步，任何一步失败、组件缺失或退出码非零都会让总验收失败，而不是跳过：
 
 1. TypeScript 构建
 2. Web 构建：编译浏览器代码，校验 2 MiB 预算、HTML shell 中必需的 CSP 指令与无绝对 URL（这是必需的指令级检查，不是“CSP 无法被削弱”的穷举证明；同源与无控制台错误由浏览器 E2E 单独断言）
-3. 全部 TypeScript 测试（串行，94 个）
-4. Web 测试（3 个文件、17 个用例；零文件或数量下降都会失败）
+3. 全部 TypeScript 测试（串行，100 个）
+4. Web 测试（3 个文件、18 个用例；零文件或数量下降都会失败）
 5. Python 参考自测
 6. fixture 溯源（源码哈希、模型 ID、schema、用例数）
 7. 源代码变异检查
@@ -233,13 +239,13 @@ MIT，见 [LICENSE](LICENSE)。
 
 1. **Numerical semantics** — the TypeScript implementation must match an independent Python/NumPy reference element by element on 130 reserved cases: logits, every layer's hidden states, and every layer's K/V cache.
 2. **KV cache** — the same model is run through a full-prefix path and an incremental cached path, then compared at every position under a frozen tolerance.
-3. **Fault injection** — three teaching faults are injected only into the cached path. Acceptance requires the normal path to pass and every fault to be caught after the first non-zero position.
+3. **Fault injection** — three teaching faults are injected only into the cached path. Acceptance requires the normal path to pass and every fault to be caught after the first non-zero position. A fourth mode, `no-cache-recompute`, is a control: it must pass numerically while a deterministic work ledger shows that the cache is bypassed.
 
 A pure-accounting KV paging simulator (lowest-free-page allocation, atomic OOM failure) is included to explain paging waste. It does not pretend to measure real GPU memory.
 
 ### Status: A3 public beta
 
-Implemented: frozen numerical contract, deterministic weights, full and cached paths, three faults, a 130-case independent fixture, the `run` / `replay` / `demo` CLI, a six-mutant source mutation check, and a static browser lab with a per-position capture bar, step detail, KV cache slots, a single-request paging experiment, experiment export/import, English/Chinese chrome, keyboard operation, narrow layout and reduced motion. The serial `scripts/verify.mjs` gate now has eight stages, including the web build and web tests. A3 release adds the MIT license, CI and GitHub Pages workflows, and real UI screenshots. The [live demo](https://gedouluhui.github.io/llm-systems-lab/) and the [repository](https://github.com/gedouluhui/llm-systems-lab) are published.
+Implemented: frozen numerical contract, deterministic weights, full and cached paths, three divergent faults plus the exact `no-cache-recompute` control, a deterministic work ledger, a 130-case independent fixture, the `run` / `replay` / `demo` CLI, a six-mutant source mutation check, and a static browser lab with a per-position capture bar, step detail, KV cache slots, a single-request paging experiment, experiment export/import, English/Chinese chrome, keyboard operation, narrow layout and reduced motion. The serial `scripts/verify.mjs` gate now has eight stages, including the web build and web tests. A3 release adds the MIT license, CI and GitHub Pages workflows, and real UI screenshots. The [live demo](https://gedouluhui.github.io/llm-systems-lab/) and the [repository](https://github.com/gedouluhui/llm-systems-lab) are published.
 
 Not included: training or model-quality evaluation, real GPU memory/throughput measurement, real user testing or user studies. The project makes no claim of model quality, speed, visual quality or learning effectiveness.
 
@@ -255,7 +261,7 @@ Real build, headless Edge 157 at 1280×900; not mockups. Environment and limits 
 ```bash
 npm install
 npm run build
-npm test                     # 94 tests, including the 130-case cross-language comparison
+npm test                     # 100 tests, including the 130-case cross-language comparison
 node dist/src/cli.js demo
 node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9
 node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9 --fault cache-overwrite
@@ -265,7 +271,7 @@ node scripts/verify.mjs
 # Static teaching lab (two terminals); requires Edge or Chrome for E2E
 node scripts/build-web.mjs
 node scripts/serve-web.mjs   # http://127.0.0.1:4173
-npm run e2e:web              # 15 browser scenarios, isolated temporary browser profile
+npm run e2e:web              # 16 browser scenarios, isolated temporary browser profile
 ```
 
 `run` prints one line of stable JSON and exits 0 on numerical agreement, 1 on divergence, and 2 on invalid input. `replay` re-runs the recorded input, ignores recorded step results, and verifies the weight fingerprint.
@@ -281,6 +287,7 @@ One teaching route covers:
 3. **KV cache slots** — two layer grids distinguishing written, read and overwritten slots.
 4. **Single-request paging** — append and release a request, and read used pages, logical bytes, allocated bytes and waste. OOM is atomic and leaves no partial allocation.
 5. **Experiment document** — the exported JSON contains the input and paging operations but no results; import recomputes everything and rejects unknown keys, oversized documents and invalid operations.
+6. **Result summary and work ledger** — comparison verdict, first divergence, errors, `complexityClass` and the three work counters are shown on two axes; `no-cache-recompute` is explicitly labelled numerically passing but cache-bypassed.
 
 UI limits: at most 64 tokens, a 256 KiB import limit, and a 1000-operation paging log shared by live edits and imported documents. Chrome is English-first with a Chinese toggle; the explanation block is always shown in both languages. Dynamic text uses `textContent`, so imported data is never executed as HTML. Timings shown in the page are JavaScript compute time, not GPU time.
 
@@ -288,7 +295,7 @@ UI limits: at most 64 tokens, a 256 KiB import limit, and a 1000-operation pagin
 
 Vocabulary 32, context 64, 2 layers, 2 heads, head dimension 8, model dimension 16, FFN dimension 32, LayerNorm epsilon 1e-5. Weights are float32, accumulation is float64, and comparison uses `|a - r| <= 1e-5 + 1e-4 * |r|`. Weights come from a fixed LCG, so a seed identifies the same float32 weights everywhere; the fingerprint is SHA-256 over little-endian float32 bytes in a fixed order. The weights are untrained: this validates system semantics, not model quality.
 
-### Faults
+### Faults and work ledger
 
 | Fault | Cached-path behavior | Real bug it models |
 |---|---|---|
@@ -296,8 +303,11 @@ Vocabulary 32, context 64, 2 layers, 2 heads, head dimension 8, model dimension 
 | `position-offset` | reads positional embedding `(pos + 1) mod 64` after position 0 | off-by-one positions |
 | `cache-overwrite` | overwrites slot 0 K/V before appending after position 0 | slot aliasing / ring-buffer overflow |
 | `mask-current-only` | attends only to the newest slot | broken causal mask or window |
+| `no-cache-recompute` | recomputes the whole prefix with the full-prefix engine each step and mirrors the cache | cache bypass: correct numbers, blown-up cost |
 
-All three are identical to the correct path at position 0, so detection must show `firstDivergence >= 1`.
+The first three are identical to the correct path at position 0, so detection must show `firstDivergence >= 1`.
+
+`no-cache-recompute` is a control, not a divergent fault: it must pass the numerical comparison (`passes === true`), but it triggers the deterministic work-ledger warning. Every step reports integer `kvReadSlots`, `recomputeTokens` and `attentionMacs`; the run summary totals them into `totalRecomputeTokens`, `expectedCachedTokens`, `totalKvReadSlots`, `totalAttentionMacs` plus a mode-fixed `complexityClass` (`O(T) step / O(T^2) total`, `O(1) masked`, or `O(T^2) step / O(T^3) total`). The counts follow from positions and layer count only, so every platform produces the same ledger; no wall-clock time enters it. CLI, web summary and API present both axes — numerical verdict and complexity class — so a single pass/fail cannot hide whether the cache was actually used.
 
 ### Independent reference
 
@@ -305,7 +315,7 @@ All three are identical to the correct path at position 0, so detection must sho
 
 ### Verification
 
-`scripts/verify.mjs` runs eight stages serially: build, web build, TypeScript tests (94), web tests (17 across three files), Python reference tests, fixture provenance, a six-mutant source-mutation check, and a packed-artifact smoke test. The web build asserts the 2 MiB budget, the required CSP directives in the HTML shell, and the absence of absolute URLs in that shell; it is a required-directive check, not a proof that the policy cannot be weakened later, and the browser E2E separately asserts that every loaded resource is same-origin and that the console is error-free. Web tests fail closed if no web test file exists or the count drops. Missing components or non-zero exits fail the gate; nothing is silently skipped. Mutants count only when the build succeeds and a named test fails. The mutation runner has its own tests covering CAUGHT, MISSED, NOP, BUILD-FAIL, WRONG-FAILURE, non-unique targets, and missing targets. Negative control: `WEB_MAX_BYTES=1 node scripts/verify.mjs` must fail at the web-build stage.
+`scripts/verify.mjs` runs eight stages serially: build, web build, TypeScript tests (100), web tests (18 across three files), Python reference tests, fixture provenance, a six-mutant source-mutation check, and a packed-artifact smoke test. The web build asserts the 2 MiB budget, the required CSP directives in the HTML shell, and the absence of absolute URLs in that shell; it is a required-directive check, not a proof that the policy cannot be weakened later, and the browser E2E separately asserts that every loaded resource is same-origin and that the console is error-free. Web tests fail closed if no web test file exists or the count drops. Missing components or non-zero exits fail the gate; nothing is silently skipped. Mutants count only when the build succeeds and a named test fails. The mutation runner has its own tests covering CAUGHT, MISSED, NOP, BUILD-FAIL, WRONG-FAILURE, non-unique targets, and missing targets. Negative control: `WEB_MAX_BYTES=1 node scripts/verify.mjs` must fail at the web-build stage.
 
 ### Limitations
 

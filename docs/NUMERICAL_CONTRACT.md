@@ -1,6 +1,11 @@
 # Numerical contract: tiny-decoder-v1
 
-Status: A0 frozen specification. This is an untrained, synthetic teaching model, not a language-quality benchmark. Changing a constant or rounding boundary changes the model version. This document specifies A0–A1; it does not claim the planned browser UI exists.
+Status: A0 frozen specification, extended by A1.5 (work ledger and the
+`no-cache-recompute` diagnostic mode). This is an untrained, synthetic
+teaching model, not a language-quality benchmark. Changing a constant or
+rounding boundary changes the model version; adding a labelled diagnostic
+mode does not. This document specifies A0–A1; it does not claim the planned
+browser UI exists.
 
 ## Model
 
@@ -47,9 +52,26 @@ Faults are explicit teaching features, not normal modes hidden behind heuristics
 - none: correct path;
 - position-offset: after position 0, use P[(position+1) modulo 64] instead of P[position];
 - cache-overwrite: after position 0, replace cache entry 0 with the new K/V before appending the new entry, at every layer;
-- mask-current-only: attend only to the newly appended cache entry rather than all history.
+- mask-current-only: attend only to the newly appended cache entry rather than all history;
+- no-cache-recompute: a numerically exact but deliberately degraded path. Each step recomputes the whole prefix with the full-prefix engine, slices that position's logits and hidden rows, and mirrors the recomputed K/V into the internal cache so the final-cache comparison stays clean. It is the control that proves "passes the comparison" and "uses the cache" are different questions.
 
-Fault runs are labelled with the mode. Their logits still come from the numerical engine, not planted results. Position 0 is identical across all modes. Tests must prove later divergence on a declared nontrivial sequence, and a normal rerun must recover.
+Fault runs are labelled with the mode. Their logits still come from the numerical engine, not planted results. Position 0 is identical across all modes. Tests must prove later divergence on a declared nontrivial sequence for the three divergent modes, and a normal rerun must recover. `no-cache-recompute` must never diverge numerically; instead it must degrade the work ledger below.
+
+## Deterministic work ledger
+
+Every step also reports `StepWorkStats {kvReadSlots, recomputeTokens, attentionMacs}`. The counts are integers computed from positions and layer count; no wall-clock time, random value or platform detail enters them, so two machines must produce the same ledger for the same input.
+
+- `kvReadSlots`: attention slots read across every layer, summed over that step's cache events. A normal step at position p reads slots 0..p in both layers, so p+1 slots per layer. The no-cache path reads the whole triangular prefix once per recomputation: prefix length n = position+1 counts n(n+1)/2 slot reads per layer.
+- `recomputeTokens`: hidden states recomputed at that step. The cached path recomputes only the new token (1); the no-cache path recomputes the whole prefix (n).
+- `attentionMacs`: `kvReadSlots × 32`, where 32 = 2 × headDim (8) × numHeads (2) multiply-adds per slot read.
+
+`ExperimentResult.workSummary` aggregates the steps into `totalRecomputeTokens`, `expectedCachedTokens` (= steps compared), `totalKvReadSlots`, `totalAttentionMacs` and a mode-fixed `complexityClass`:
+
+- `O(T) step / O(T^2) total` for none, position-offset and cache-overwrite;
+- `O(1) masked` for mask-current-only (attention sees a single slot);
+- `O(T^2) step / O(T^3) total` for no-cache-recompute.
+
+The class is a property of the mode, not of one sample; a short run does not relabel it. A run is degraded when `totalRecomputeTokens > expectedCachedTokens`. Degraded runs still pass the numerical comparison by construction: that is the point of the pair. Reports must present both axes, the comparison verdict and the work ledger, rather than collapsing them into one number.
 
 ## Python reference fixture format
 
@@ -69,11 +91,11 @@ Limits: pool 1..1024 pages; page size 1..64 tokens; request ID 1..64 ASCII chara
 
 ## Experiments and CLI
 
-ExperimentInput is exactly {schemaVersion:1, seed:uint32, tokens:nonempty integer array, fault:one of the four modes}. Unknown keys, unknown versions, invalid types and contexts over 64 are rejected; parsers do not coerce strings or booleans to numbers.
+ExperimentInput is exactly {schemaVersion:1, seed:uint32, tokens:nonempty integer array, fault:one of the five modes}. Unknown keys, unknown versions, invalid types and contexts over 64 are rejected; parsers do not coerce strings or booleans to numbers.
 
-ExperimentResult includes schemaVersion=1, engineVersion="0.1.0-a1", mode="numerical", model (ID, untrained=true, weightsSha256, storage and accumulation types), input, tolerances, steps, comparison and final cache. A step contains position, token, fullLogits, cachedLogits, layer-level errors and cache events from that step. firstDivergence is a zero-based token position or null. A mismatch only in the final cache is reported at the last token position, because the final cache is the state produced there; thus passes is false exactly when firstDivergence is not null. No timestamp enters the deterministic result.
+ExperimentResult includes schemaVersion=1, engineVersion="0.1.0-a1", mode="numerical", model (ID, untrained=true, weightsSha256, storage and accumulation types), input, tolerances, steps, comparison, final cache and workSummary. A step contains position, token, fullLogits, cachedLogits, layer-level errors, cache events and the step's work ledger. firstDivergence is a zero-based token position or null. A mismatch only in the final cache is reported at the last token position, because the final cache is the state produced there; thus passes is false exactly when firstDivergence is not null. No timestamp enters the deterministic result.
 
-CLI commands: demo; run --seed N --tokens 1,2,3 [--fault MODE]; replay FILE. run/replay emit JSON only on stdout. Exit 0 means comparison passes, 1 means numerical divergence, 2 means usage/input/runtime error. demo is an offline validation walkthrough: its exit 0 means normal passed AND every advertised faulty mode diverged. It prints human-readable observations and does not claim model quality or speed.
+CLI commands: demo; run --seed N --tokens 1,2,3 [--fault MODE]; replay FILE. run/replay emit JSON only on stdout. Exit 0 means comparison passes, 1 means numerical divergence, 2 means usage/input/runtime error. demo is an offline validation walkthrough: its exit 0 means normal passed, every divergent fault was caught after the first position, and the no-cache control stayed numerically exact while its work ledger degraded. It prints human-readable observations and does not claim model quality or speed.
 
 replay reads at most 1 MiB of JSON, requires matching report schemaVersion, engineVersion and model ID, validates its input, recomputes instead of trusting recorded results, and checks the regenerated weight fingerprint. It never executes imported content, writes files or fetches a URL. Core code does not depend on Node modules or any network transport; Node fs is restricted to the CLI.
 

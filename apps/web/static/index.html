@@ -75,6 +75,10 @@
                 <input type="radio" name="fault" value="mask-current-only">
                 <span data-copy="faultMaskCurrentOnly">Mask current only</span>
               </label>
+              <label class="choice">
+                <input type="radio" name="fault" value="no-cache-recompute">
+                <span data-copy="faultNoCacheRecompute">No-cache recompute</span>
+              </label>
             </fieldset>
 
             <p id="fault-teaching" class="hint">Injected fault: None</p>
@@ -147,7 +151,25 @@
                 <dt data-copy="computeTime">Compute time</dt>
                 <dd data-field="compute" class="mono">—</dd>
               </div>
+              <div class="summary-row">
+                <dt data-copy="workClass">Complexity class</dt>
+                <dd data-field="work-class" class="mono">—</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="workTokens">Recomputed / cached tokens</dt>
+                <dd data-field="work-tokens" class="mono">—</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="workKvReads">KV slot reads</dt>
+                <dd data-field="work-kv" class="mono">—</dd>
+              </div>
+              <div class="summary-row">
+                <dt data-copy="workAttention">Attention multiply-adds</dt>
+                <dd data-field="work-attention" class="mono">—</dd>
+              </div>
             </dl>
+            <p id="work-note" class="note work-note" data-state="ok"></p>
+            <p class="note" data-copy="workHint">Deterministic counts, identical on every platform. Wall-clock time is only a local reference.</p>
             <p class="note" data-copy="notGpuTime">CPU time for this tiny model, not GPU or serving latency.</p>
           </section>
 

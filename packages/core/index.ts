@@ -8,6 +8,7 @@ export type {
   CacheSnapshotLayer,
   FullForwardResult,
   StepResult,
+  StepWorkStats,
 } from './decoder.js';
 export {
   ENGINE_VERSION,
@@ -19,10 +20,12 @@ export {
 } from './experiment.js';
 export type {
   CompareOptions,
+  ComplexityClass,
   ExperimentComparison,
   ExperimentModelInfo,
   ExperimentResult,
   ExperimentStep,
+  ExperimentWorkSummary,
   FinalCacheLayer,
   LayerComparison,
   VectorComparison,

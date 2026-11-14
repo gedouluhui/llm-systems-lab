@@ -5,7 +5,7 @@ import {
   validateTokens,
   type ExperimentInput,
 } from '../../../packages/contracts/index.js';
-import type { CacheEvent, ExperimentResult } from '../../../packages/core/index.js';
+import type { CacheEvent, ComplexityClass, ExperimentResult } from '../../../packages/core/index.js';
 import type { PagePoolSnapshot } from '../../../packages/simulator/index.js';
 import { replayPaging } from './paging-run.js';
 
@@ -17,6 +17,12 @@ export interface RunSummary {
   maxRelativeError: number;
   fingerprintShort: string;
   engineVersion: string;
+  totalRecomputeTokens: number;
+  expectedCachedTokens: number;
+  totalKvReadSlots: number;
+  totalAttentionMacs: number;
+  complexityClass: ComplexityClass;
+  degraded: boolean;
 }
 
 export interface CaptureMark {
@@ -217,6 +223,7 @@ export function parseTokens(text: string): number[] {
 }
 
 export function summarizeRun(result: ExperimentResult): RunSummary {
+  const work = result.workSummary;
   return {
     passes: result.comparison.passes,
     firstDivergence: result.comparison.firstDivergence,
@@ -225,6 +232,12 @@ export function summarizeRun(result: ExperimentResult): RunSummary {
     maxRelativeError: result.comparison.maxRelativeError,
     fingerprintShort: shortHash(result.model.weightsSha256),
     engineVersion: result.engineVersion,
+    totalRecomputeTokens: work.totalRecomputeTokens,
+    expectedCachedTokens: work.expectedCachedTokens,
+    totalKvReadSlots: work.totalKvReadSlots,
+    totalAttentionMacs: work.totalAttentionMacs,
+    complexityClass: work.complexityClass,
+    degraded: work.totalRecomputeTokens > work.expectedCachedTokens,
   };
 }
 
