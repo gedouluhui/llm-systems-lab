@@ -150,6 +150,96 @@ test('snapshots and append results are defensive copies', () => {
   assert.deepEqual(second.freePages, [1, 2, 3]);
 });
 
+test('allocation policy defaults to lowest and rejects unknown values', () => {
+  const pool = new PagePool(8, 4);
+  assert.equal(pool.allocationPolicy, 'lowest');
+  assert.equal(pool.snapshot().allocationPolicy, 'lowest');
+  for (const policy of ['', 'LIFO', 'random', 1, null, {}, true]) {
+    expectError(() => new PagePool(8, 4, policy), 'INPUT', `policy ${String(policy)}`);
+  }
+  assert.equal(new PagePool(8, 4, 'stack').snapshot().allocationPolicy, 'stack');
+});
+
+test('stack policy hands back the most recently released pages first', () => {
+  const pool = new PagePool(1, 4, 'stack');
+  assert.deepEqual(pool.append('a', 2).pages, [0, 1]);
+  assert.deepEqual(pool.append('b', 1).pages, [2]);
+  assert.deepEqual(pool.snapshot().freePages, [3]);
+
+  pool.release('a');
+  assert.deepEqual(pool.snapshot().freePages, [0, 1, 3]);
+
+  const reused = pool.append('c', 2);
+  assert.deepEqual(reused.pages, [1, 0], 'LIFO reuse order');
+  assert.deepEqual(pool.snapshot().freePages, [3]);
+  assert.equal(pool.snapshot().allocatedPages, 3);
+  assert.equal(pool.snapshot().logicalTokens, 3);
+});
+
+test('500 deterministic stack-policy operations match a LIFO oracle', () => {
+  const pageSize = 4;
+  const pageCount = 16;
+  const pool = new PagePool(pageSize, pageCount, 'stack');
+  const oracle = new Map();
+  let free = Array.from({ length: pageCount }, (_, index) => pageCount - 1 - index);
+  let state = 987654321;
+
+  function nextValue() {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state;
+  }
+
+  for (let operation = 0; operation < 500; operation += 1) {
+    const value = nextValue();
+    const id = `s${value % 5}`;
+    const releasing = value % 3 === 0;
+    if (releasing) {
+      const entry = oracle.get(id);
+      if (entry === undefined) {
+        expectError(() => pool.release(id), 'INPUT', `stack unknown release at ${operation}`);
+      } else {
+        const summary = pool.release(id);
+        assert.deepEqual([...summary.releasedPages].sort((a, b) => a - b),
+          [...entry.pages].sort((a, b) => a - b), `stack released pages at ${operation}`);
+        assert.equal(summary.releasedTokens, entry.tokens);
+        free = [...free, ...entry.pages];
+        oracle.delete(id);
+      }
+    } else {
+      const count = 1 + (value % 12);
+      const previous = oracle.get(id);
+      const tokens = (previous?.tokens ?? 0) + count;
+      const wanted = Math.ceil(tokens / pageSize) - (previous === undefined ? 0 : previous.pages.length);
+      if (wanted > free.length) {
+        expectError(() => pool.append(id, count), 'OOM', `stack oom at ${operation}`);
+      } else {
+        const taken = [];
+        for (let index = 0; index < wanted; index += 1) taken.push(free.pop());
+        oracle.set(id, {
+          tokens,
+          pages: previous === undefined ? taken : [...previous.pages, ...taken],
+        });
+        pool.append(id, count);
+      }
+    }
+
+    const snapshot = pool.snapshot();
+    assert.equal(snapshot.allocationPolicy, 'stack');
+    assert.deepEqual(snapshot.freePages, [...free].sort((a, b) => a - b),
+      `stack free pages at ${operation}`);
+    assert.equal(snapshot.allocatedPages,
+      [...oracle.values()].reduce((total, entry) => total + entry.pages.length, 0),
+      `stack allocated pages at ${operation}`);
+    assert.equal(snapshot.requests.length, oracle.size, `stack request count at ${operation}`);
+    for (const request of snapshot.requests) {
+      const entry = oracle.get(request.id);
+      assert.ok(entry !== undefined, `stack unexpected request ${request.id} at ${operation}`);
+      assert.equal(request.tokens, entry.tokens);
+      assert.deepEqual(request.pages, entry.pages, `stack pages for ${request.id} at ${operation}`);
+    }
+  }
+});
+
 test('1000 deterministic append/release operations match an independent oracle', () => {
   const pageSize = 8;
   const pageCount = 32;

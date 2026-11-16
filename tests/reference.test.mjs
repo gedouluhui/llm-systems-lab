@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { createModel, fullForward, weightsFingerprint } from '../dist/packages/core/index.js';
+import { CachedDecoder, createModel, fullForward, weightsFingerprint } from '../dist/packages/core/index.js';
 
 const FIXTURE_URL = new URL('./fixtures/reference.json', import.meta.url);
 const TOLERANCE = Object.freeze({ atol: 1e-5, rtol: 1e-4 });
@@ -59,6 +59,41 @@ test('TypeScript matches the independent NumPy reference on every reserved case'
           item.cache[layer].keys[row], `case ${caseIndex} keys[${layer}][${row}]`);
         compareArray(result.cache[layer].values.subarray(row * 16, (row + 1) * 16),
           item.cache[layer].values[row], `case ${caseIndex} values[${layer}][${row}]`);
+      }
+    }
+  }
+});
+
+test('CachedDecoder matches the independent NumPy reference step by step on every reserved case', async () => {
+  const fixture = JSON.parse(readFileSync(FIXTURE_URL, 'utf8'));
+  const models = new Map();
+  for (const [caseIndex, item] of fixture.cases.entries()) {
+    let model = models.get(item.seed);
+    if (model === undefined) {
+      model = createModel(item.seed);
+      models.set(item.seed, model);
+    }
+    const decoder = new CachedDecoder(model);
+    for (let row = 0; row < item.tokens.length; row += 1) {
+      const step = decoder.step(item.tokens[row]);
+      assert.equal(step.position, row, `case ${caseIndex} step position`);
+      assert.equal(step.token, item.tokens[row], `case ${caseIndex} step token`);
+      compareArray(step.logits, item.logits[row],
+        `case ${caseIndex} (seed ${item.seed}) cached logits[${row}]`);
+      for (let layer = 0; layer < 2; layer += 1) {
+        compareArray(step.hidden[layer], item.hidden[layer][row],
+          `case ${caseIndex} (seed ${item.seed}) cached hidden[${layer}][${row}]`);
+      }
+    }
+    assert.equal(decoder.length, item.tokens.length, `case ${caseIndex} cached length`);
+    const snapshot = decoder.snapshot();
+    assert.equal(snapshot.length, 2, `case ${caseIndex} snapshot layer count`);
+    for (let layer = 0; layer < 2; layer += 1) {
+      for (let row = 0; row < item.tokens.length; row += 1) {
+        compareArray(snapshot[layer].keys.subarray(row * 16, (row + 1) * 16),
+          item.cache[layer].keys[row], `case ${caseIndex} cached keys[${layer}][${row}]`);
+        compareArray(snapshot[layer].values.subarray(row * 16, (row + 1) * 16),
+          item.cache[layer].values[row], `case ${caseIndex} cached values[${layer}][${row}]`);
       }
     }
   }
