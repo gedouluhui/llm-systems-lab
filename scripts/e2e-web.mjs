@@ -1327,7 +1327,12 @@ export async function runE2E(options = {}) {
       },
 
       async motion() {
-        await cdp.send('Emulation.setEmulatedMedia', { features: [] });
+        // CI runners may report prefers-reduced-motion: reduce from the OS.
+        // Measure the normal branch under an explicit no-preference context,
+        // then emulate reduce for the second half of the section.
+        await cdp.send('Emulation.setEmulatedMedia', {
+          features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }],
+        });
         const before = await evaluate(`(() => {
           const lamp = document.querySelector('#status-lamp');
           if (lamp === null) {
