@@ -142,8 +142,12 @@ function nativeSpawnFailure(t, failure) {
       assert.equal(evidence.removedBeforeSpawn, true);
       assert.equal(evidence.pid, null);
       assert.equal(evidence.errorCode, 'ENOENT');
-      assert.ok(evidence.errorListenersAtEmit > 0, 'listener must exist before the native error event');
-      assert.deepEqual(evidence.listeners, { error: 0, exit: 0, close: 0 });
+      if (process.platform !== 'darwin') {
+        // macOS delivers the native error through a different libuv path; the
+        // listener counts below are diagnostic there, not a contract.
+        assert.ok(evidence.errorListenersAtEmit > 0, 'listener must exist before the native error event');
+        assert.deepEqual(evidence.listeners, { error: 0, exit: 0, close: 0 });
+      }
     } else {
       assert.equal(evidence.synchronous, true);
       assert.equal(evidence.errorCode, 'ERR_INVALID_ARG_VALUE');
@@ -170,10 +174,5 @@ function nativeSpawnFailure(t, failure) {
 }
 
 for (const failure of ['removed executable', 'invalid spawn argument']) {
-  // These cases assert the kernel's ENOENT timing and listener counts. macOS
-  // emits the error asynchronously through a different path; the product path
-  // stays covered by the Linux and Windows jobs.
-  test(`CLI reports and cleans up native spawn failure: ${failure}`,
-    { skip: process.platform === 'darwin' ? 'native spawn-failure timings are asserted on Linux and Windows' : false },
-    (t) => nativeSpawnFailure(t, failure));
+  test(`CLI reports and cleans up native spawn failure: ${failure}`, (t) => nativeSpawnFailure(t, failure));
 }
