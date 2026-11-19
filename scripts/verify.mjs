@@ -227,8 +227,9 @@ function stageTests() {
         + `skipped=${summary.skipped} (allowed ${allowedSkips} on ${process.platform}), todo=${summary.todo})`,
     );
   }
-  if (summary.pass !== summary.tests) {
-    throw new Error(`TypeScript test totals disagree (pass=${summary.pass}, tests=${summary.tests})`);
+  if (summary.pass + summary.skipped !== summary.tests) {
+    throw new Error(`TypeScript test totals disagree (pass=${summary.pass}, `
+      + `skipped=${summary.skipped}, tests=${summary.tests})`);
   }
   if (summary.tests < MIN_TYPESCRIPT_TESTS) {
     throw new Error(
