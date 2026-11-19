@@ -4,3 +4,7 @@ artifacts/
 .superpowers/
 __pycache__/
 *.pyc
+
+# 本地构建快照与内部计划，不入库
+dist-old-*/
+docs/superpowers/
