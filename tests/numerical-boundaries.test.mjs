@@ -18,8 +18,11 @@ function within(actual, expected, budget, label) {
 }
 
 test('local operator evidence is tied to its independent generator', () => {
-  const source = readFileSync(new URL('../reference/operator_bounds.py', import.meta.url));
-  assert.equal(createHash('sha256').update(source).digest('hex'), fixture.generatorSha256);
+  // The digest is over the generator's text, not over a checkout's line endings.
+  const source = readFileSync(new URL('../reference/operator_bounds.py', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  assert.equal(createHash('sha256').update(Buffer.from(source, 'utf8')).digest('hex'),
+    fixture.generatorSha256);
   assert.equal(fixture.schemaVersion, 1);
 });
 
