@@ -20,6 +20,21 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def posix_bash():
+    """Return a real POSIX shell, or None when only the WSL stub is present.
+
+    GitHub's Windows runners have C://Windows//System32//bash.exe, which is a WSL
+    launcher, not bash. The workflow uses an explicit `shell: bash`, so these
+    contracts are only meaningful where such a shell exists.
+    """
+    path = shutil.which("bash")
+    if not path:
+        return None
+    if os.name == "nt" and "system32" in path.lower():
+        return None
+    return path
+
+
 def load_workflow(name):
     with (ROOT / ".github" / "workflows" / name).open(encoding="utf-8") as source:
         return yaml.load(source, Loader=yaml.BaseLoader)
@@ -107,7 +122,7 @@ class CIContract(unittest.TestCase):
 
             def normalize():
                 result = subprocess.run(
-                    ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
+                    [posix_bash(), "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
                     cwd=sandbox, capture_output=True, text=True, encoding="utf-8", timeout=30,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -152,6 +167,8 @@ class CIContract(unittest.TestCase):
         self.assertEqual(deploy["steps"][-1]["uses"], "actions/deploy-pages@v4")
 
     def run_real_gate(self, step_name, injected_env, check_receipt):
+        if posix_bash() is None:
+            self.skipTest("a POSIX bash is not available; workflow contracts are structural only here")
         step = self.step(step_name)
         self.assertEqual(self.ci["defaults"]["run"]["shell"], "bash")
         # Copy only build/runtime inputs, never artifacts, .git, user profiles or secrets.
@@ -168,7 +185,7 @@ class CIContract(unittest.TestCase):
             # GitHub's explicit `shell: bash` uses -e -o pipefail. No network,
             # dependency install, CI emulation or deployment is performed here.
             result = subprocess.run(
-                ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
+                [posix_bash(), "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
                 cwd=sandbox, env=env, capture_output=True, text=True, encoding="utf-8", timeout=120,
             )
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -192,7 +209,7 @@ class CIContract(unittest.TestCase):
             self.assertFalse(receipt["ok"])
             self.assertFalse(receipt["full"])
             self.assertEqual(receipt["executed"], [])
-            self.assertEqual(len(receipt["requested"]), 19)
+            self.assertEqual(len(receipt["requested"]), 20)
             self.assertEqual(receipt["results"][0]["name"], "harness")
             self.assertFalse(receipt["results"][0]["ok"])
             self.assertIn("LAB_BROWSER", receipt["results"][0]["detail"])
