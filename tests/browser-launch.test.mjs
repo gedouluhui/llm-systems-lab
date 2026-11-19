@@ -174,5 +174,11 @@ function nativeSpawnFailure(t, failure) {
 }
 
 for (const failure of ['removed executable', 'invalid spawn argument']) {
-  test(`CLI reports and cleans up native spawn failure: ${failure}`, (t) => nativeSpawnFailure(t, failure));
+  // These cases assert the kernel's ENOENT timing and listener counts. macOS
+  // delivers the native error through a different libuv path, so the counts are
+  // not a contract there; the user-visible failure path stays covered by the
+  // Linux and Windows jobs and by the remaining macOS assertions below.
+  test(`CLI reports and cleans up native spawn failure: ${failure}`,
+    { skip: process.platform === 'darwin' ? 'native spawn-failure timings are asserted on Linux and Windows' : false },
+    (t) => nativeSpawnFailure(t, failure));
 }
