@@ -84,6 +84,59 @@ test('compareVectors applies inclusive absolute and relative tolerance boundarie
   assert.equal(compareVectors([1e-5], [0]).maxRelativeError, 1, 'zero reference uses atol as scale');
 });
 
+test('compareVectors exact zero has a JSON-safe zero relative error at zero tolerance', () => {
+  const result = compareVectors([0], [0], { atol: 0, rtol: 0 });
+  assert.equal(result.passes, true);
+  assert.equal(result.maxRelativeError, 0);
+  assert.equal(JSON.parse(JSON.stringify(result)).maxRelativeError, 0);
+});
+
+test('compareVectors treats signed zero equally without poisoning later metrics', () => {
+  const result = compareVectors(
+    new Float64Array([-0, 0, 2]), new Float64Array([0, -0, 1]), { atol: 0, rtol: 0 },
+  );
+  assert.deepEqual(result, {
+    passes: false, length: 3, maxAbsoluteError: 1, maxRelativeError: 1, firstMismatch: 2,
+  });
+});
+
+test('compareVectors reports infinite relative error for nonzero versus zero with no absolute floor', () => {
+  for (const value of [1, -1, Number.MIN_VALUE]) {
+    const result = compareVectors([value], [0], { atol: 0, rtol: 0 });
+    assert.equal(result.passes, false);
+    assert.equal(result.firstMismatch, 0);
+    assert.equal(result.maxAbsoluteError, Math.abs(value));
+    assert.equal(result.maxRelativeError, Infinity);
+  }
+});
+
+test('compareVectors keeps representable extreme differences and ratios honest', () => {
+  const maximum = Number.MAX_VALUE;
+  assert.equal(compareVectors([maximum], [maximum], { atol: 0, rtol: 0 }).maxRelativeError, 0);
+  const result = compareVectors([maximum], [0], { atol: Number.MIN_VALUE, rtol: 0 });
+  assert.equal(result.passes, false);
+  assert.equal(result.maxAbsoluteError, maximum);
+  assert.equal(result.maxRelativeError, Infinity, 'ratio overflow must not be saturated');
+  assert.equal(compareVectors([0], [Number.MIN_VALUE], { atol: 0, rtol: 0 }).passes, false);
+});
+
+for (const [label, actual, reference, options] of [
+  ['subtraction', Number.MAX_VALUE, -Number.MAX_VALUE, { atol: 0, rtol: 0 }],
+  ['subtraction and threshold', Number.MAX_VALUE, -Number.MAX_VALUE, { atol: 0, rtol: 2 }],
+  ['tolerance multiplication', 0, Number.MAX_VALUE, { atol: 0, rtol: 2 }],
+  ['tolerance addition', 0, Number.MAX_VALUE, { atol: Number.MAX_VALUE, rtol: 1 }],
+  ['tolerance even for equal operands', Number.MAX_VALUE, Number.MAX_VALUE, { atol: 0, rtol: 2 }],
+]) {
+  test(`compareVectors rejects finite-input ${label} overflow as NON_FINITE`, () => {
+    rejects(() => compareVectors([actual], [reference], options), 'NON_FINITE', label);
+  });
+}
+
+test('compareVectors still checks overflow after an earlier mismatch', () => {
+  rejects(() => compareVectors([1, Number.MAX_VALUE], [0, -Number.MAX_VALUE], { atol: 0, rtol: 0 }),
+    'NON_FINITE', 'later subtraction overflow');
+});
+
 test('runExperiment is deterministic and reports real full and cached results', async () => {
   const input = normalInput();
   const first = await runExperiment(input);

@@ -5,7 +5,15 @@ import {
   type ExperimentInput,
   type FaultMode,
 } from '../contracts/index.js';
-import { CachedDecoder, fullForward, type CacheEvent, type CacheSnapshotLayer, type StepWorkStats } from './decoder.js';
+import {
+  CachedDecoder,
+  fullForward,
+  type CacheEvent,
+  type CacheSnapshotLayer,
+  type FullForwardResult,
+  type StepResult,
+  type StepWorkStats,
+} from './decoder.js';
 import { createModel, weightsFingerprint } from './model.js';
 
 export const ENGINE_VERSION = '0.1.0-a1';
@@ -92,9 +100,132 @@ export interface ExperimentResult {
   finalCache: FinalCacheLayer[];
 }
 
+/** Local elapsed wall time, never part of a deterministic report. */
+export interface ExperimentTiming {
+  fullForwardMs: number;
+  cachedDecoderMs: number;
+  totalMs: number;
+}
+
+export interface TimedExperimentResult<T> {
+  result: T;
+  timing: ExperimentTiming;
+}
+
+export interface TopKLogit {
+  tokenId: number;
+  logit: number;
+}
+
+export interface LightExperimentStep extends Omit<ExperimentStep, 'fullLogits' | 'cachedLogits'> {
+  logitsLength: number;
+  fullTopK: TopKLogit[];
+  cachedTopK: TopKLogit[];
+}
+
+export interface LightFinalCacheLayer {
+  layer: number;
+  rows: number;
+  columns: number;
+}
+
+/** A compact report, not a full report with optional or missing tensors. */
+export interface LightExperimentResult extends Omit<ExperimentResult, 'steps' | 'finalCache'> {
+  detail: 'light';
+  topK: number;
+  steps: LightExperimentStep[];
+  finalCache: LightFinalCacheLayer[];
+}
+
+export interface FullExperimentOptions {
+  detail: 'full';
+  topK?: never;
+}
+
+export interface LightExperimentOptions {
+  detail: 'light';
+  topK?: number;
+}
+
+export type ExperimentOptions = FullExperimentOptions | LightExperimentOptions;
+
+type ValidatedOptions = FullExperimentOptions | { detail: 'light'; topK: number };
+
 export interface CompareOptions {
   atol?: number;
   rtol?: number;
+}
+
+function validateTopK(k: unknown, length: number): number {
+  if (typeof k !== 'number' || !Number.isInteger(k) || k < 1 || k > length) {
+    throw new LabError('INPUT', `topK must be an integer in [1, ${length}]`);
+  }
+  return k;
+}
+
+function validateOptions(options: unknown): ValidatedOptions {
+  if (options === undefined) {
+    return { detail: 'full' };
+  }
+  if (!isPlainRecord(options)) {
+    throw new LabError('INPUT', 'experiment options must be a plain data record');
+  }
+  const fields = new Map<string, unknown>();
+  for (const key of Reflect.ownKeys(options)) {
+    if (key !== 'detail' && key !== 'topK') {
+      throw new LabError('INPUT', 'experiment options may only contain detail and topK');
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(options, key);
+    if (descriptor === undefined || !('value' in descriptor)) {
+      throw new LabError('INPUT', 'experiment options must contain only data properties');
+    }
+    fields.set(key, descriptor.value);
+  }
+  const detail = fields.get('detail');
+  if (detail === 'full') {
+    if (fields.has('topK')) {
+      throw new LabError('INPUT', 'topK is only supported for light reports');
+    }
+    return { detail };
+  }
+  if (detail === 'light') {
+    return {
+      detail,
+      topK: fields.has('topK') ? validateTopK(fields.get('topK'), MODEL_SPEC.vocabSize) : 5,
+    };
+  }
+  throw new LabError('INPUT', 'detail must be "full" or "light"');
+}
+
+/** Rank every finite logit, keeping at most k entries; ties use ascending token id. */
+export function topKLogits(vector: unknown, k: number): TopKLogit[] {
+  if (!isVector(vector) || vector.length === 0) {
+    throw new LabError('INPUT', 'logits must be a nonempty numeric vector');
+  }
+  const count = validateTopK(k, vector.length);
+  const top: TopKLogit[] = [];
+  for (let tokenId = 0; tokenId < vector.length; tokenId += 1) {
+    const value: unknown = vector[tokenId];
+    if (typeof value !== 'number') {
+      throw new LabError('INPUT', 'logits must contain numbers');
+    }
+    if (!Number.isFinite(value)) {
+      throw new LabError('NON_FINITE', 'logits must contain only finite values');
+    }
+    const logit = value === 0 ? 0 : value;
+    let rank = 0;
+    // Token ids arrive in ascending order, so earlier equal logits stay first.
+    while (rank < top.length && top[rank]!.logit >= logit) {
+      rank += 1;
+    }
+    if (rank < count) {
+      top.splice(rank, 0, { tokenId, logit });
+      if (top.length > count) {
+        top.pop();
+      }
+    }
+  }
+  return top;
 }
 
 function isVector(value: unknown): value is ArrayLike<number> {
@@ -122,8 +253,9 @@ function checkTolerance(name: string, value: unknown): number | undefined {
 /**
  * Compares two equal-length numeric vectors with the numerical contract's
  * tolerance: |actual - reference| <= atol + rtol * |reference| (inclusive).
- * Reported relative error uses max(|reference|, atol) as its scale so a zero
- * reference still yields a finite, interpretable number.
+ * Reported relative error is zero for equal values, otherwise error divided
+ * by max(|reference|, atol); a zero scale or ratio overflow yields Infinity.
+ * Non-finite differences or tolerance thresholds throw NON_FINITE.
  */
 export function compareVectors(
   actual: unknown,
@@ -155,12 +287,16 @@ export function compareVectors(
       throw new LabError('NON_FINITE', 'comparison vectors must contain only finite values');
     }
     const error = Math.abs(actualValue - referenceValue);
+    const threshold = atol + rtol * Math.abs(referenceValue);
+    if (!Number.isFinite(error) || !Number.isFinite(threshold)) {
+      throw new LabError('NON_FINITE', 'comparison difference or tolerance threshold overflowed');
+    }
     maxAbsoluteError = Math.max(maxAbsoluteError, error);
     maxRelativeError = Math.max(
       maxRelativeError,
-      error / Math.max(Math.abs(referenceValue), atol),
+      error === 0 ? 0 : error / Math.max(Math.abs(referenceValue), atol),
     );
-    if (firstMismatch === null && error > atol + rtol * Math.abs(referenceValue)) {
+    if (firstMismatch === null && error > threshold) {
       firstMismatch = index;
     }
   }
@@ -249,21 +385,108 @@ export function resolveFirstDivergence(
   return tokenCount - 1;
 }
 
-/**
- * Runs the full-prefix and cached decoders on the validated input, compares
- * every logit and layer hidden vector at every position plus the final cache,
- * and returns a deterministic report with no timestamps or host data.
- */
-export async function runExperiment(input: unknown): Promise<ExperimentResult> {
-  const validated = validateInput(input);
-  const model = createModel(validated.seed);
-  const weightsSha256 = await weightsFingerprint(model);
-  const full = fullForward(model, validated.tokens);
-  const decoder = new CachedDecoder(model, validated.fault);
+interface ComparedStep extends Omit<ExperimentStep, 'fullLogits' | 'cachedLogits'> {
+  fullRow: Float32Array;
+  cachedRow: Float32Array;
+}
 
+/** Shared by both report formats and prefix expansion, before any projection. */
+function compareStep(full: FullForwardResult, step: StepResult): ComparedStep {
+  const position = step.position;
   const vocab = MODEL_SPEC.vocabSize;
   const width = MODEL_SPEC.modelDim;
-  const steps: ExperimentStep[] = [];
+  const fullRow = full.logits.subarray(position * vocab, (position + 1) * vocab);
+  return {
+    position,
+    token: step.token,
+    fullRow,
+    cachedRow: step.logits,
+    logits: compareVectors(step.logits, fullRow),
+    hidden: step.hidden.map((hiddenState, layer) => ({
+      layer,
+      comparison: compareVectors(
+        hiddenState,
+        full.hidden[layer]!.subarray(position * width, (position + 1) * width),
+      ),
+    })),
+    cacheEvents: step.cacheEvents.map(copyCacheEvent),
+    work: copyWork(step.work),
+  };
+}
+
+function fullStep(step: ComparedStep): ExperimentStep {
+  return {
+    position: step.position,
+    token: step.token,
+    fullLogits: toNumbers(step.fullRow),
+    cachedLogits: toNumbers(step.cachedRow),
+    logits: step.logits,
+    hidden: step.hidden,
+    cacheEvents: step.cacheEvents,
+    work: step.work,
+  };
+}
+
+function lightStep(step: ComparedStep, topK: number): LightExperimentStep {
+  const { fullRow, cachedRow, ...common } = step;
+  return {
+    ...common,
+    logitsLength: fullRow.length,
+    fullTopK: topKLogits(fullRow, topK),
+    cachedTopK: topKLogits(cachedRow, topK),
+  };
+}
+
+/**
+ * Runs both decoders and compares all logits, hidden vectors and the final
+ * cache. Light detail only reduces report materialization, not forward work.
+ * Omitting options preserves the full report, including its JSON field order.
+ */
+export function runExperiment(input: unknown, options?: FullExperimentOptions): Promise<ExperimentResult>;
+export function runExperiment(input: unknown, options: LightExperimentOptions): Promise<LightExperimentResult>;
+export function runExperiment(
+  input: unknown,
+  options?: ExperimentOptions,
+): Promise<ExperimentResult | LightExperimentResult>;
+export async function runExperiment(
+  input: unknown,
+  options?: ExperimentOptions,
+): Promise<ExperimentResult | LightExperimentResult> {
+  return runSharedExperiment(input, options);
+}
+
+export function runTimedExperiment(input: unknown, options?: FullExperimentOptions): Promise<TimedExperimentResult<ExperimentResult>>;
+export function runTimedExperiment(input: unknown, options: LightExperimentOptions): Promise<TimedExperimentResult<LightExperimentResult>>;
+export function runTimedExperiment(input: unknown, options?: ExperimentOptions): Promise<TimedExperimentResult<ExperimentResult | LightExperimentResult>>;
+export async function runTimedExperiment(
+  input: unknown,
+  options?: ExperimentOptions,
+): Promise<TimedExperimentResult<ExperimentResult | LightExperimentResult>> {
+  const started = performance.now();
+  const timing: ExperimentTiming = { fullForwardMs: 0, cachedDecoderMs: 0, totalMs: 0 };
+  const result = await runSharedExperiment(input, options, timing);
+  timing.totalMs = performance.now() - started;
+  return { result, timing };
+}
+
+async function runSharedExperiment(
+  input: unknown,
+  options?: ExperimentOptions,
+  timing?: ExperimentTiming,
+): Promise<ExperimentResult | LightExperimentResult> {
+  const validated = validateInput(input);
+  const detail = validateOptions(options);
+  const model = createModel(validated.seed);
+  const weightsSha256 = await weightsFingerprint(model);
+  const fullStarted = timing === undefined ? 0 : performance.now();
+  const full = fullForward(model, validated.tokens);
+  if (timing !== undefined) {
+    timing.fullForwardMs = performance.now() - fullStarted;
+  }
+  const decoder = new CachedDecoder(model, validated.fault);
+
+  const report: { detail: 'full'; steps: ExperimentStep[] }
+    | { detail: 'light'; topK: number; steps: LightExperimentStep[] } = { ...detail, steps: [] };
   let firstDivergence: number | null = null;
   let maxAbsoluteError = 0;
   let maxRelativeError = 0;
@@ -272,16 +495,13 @@ export async function runExperiment(input: unknown): Promise<ExperimentResult> {
   let totalAttentionMacs = 0;
 
   for (let position = 0; position < validated.tokens.length; position += 1) {
-    const step = decoder.step(validated.tokens[position]);
-    const fullRow = full.logits.subarray(position * vocab, (position + 1) * vocab);
-    const logits = compareVectors(step.logits, fullRow);
-    const hidden: LayerComparison[] = step.hidden.map((hiddenState, layer) => ({
-      layer,
-      comparison: compareVectors(
-        hiddenState,
-        full.hidden[layer]!.subarray(position * width, (position + 1) * width),
-      ),
-    }));
+    const stepStarted = timing === undefined ? 0 : performance.now();
+    const decoded = decoder.step(validated.tokens[position]);
+    if (timing !== undefined) {
+      timing.cachedDecoderMs += performance.now() - stepStarted;
+    }
+    const step = compareStep(full, decoded);
+    const { logits, hidden, work } = step;
     const stepFails = !logits.passes || hidden.some((entry) => !entry.comparison.passes);
     if (stepFails && firstDivergence === null) {
       firstDivergence = position;
@@ -290,20 +510,14 @@ export async function runExperiment(input: unknown): Promise<ExperimentResult> {
       maxAbsoluteError = Math.max(maxAbsoluteError, comparison.maxAbsoluteError);
       maxRelativeError = Math.max(maxRelativeError, comparison.maxRelativeError);
     }
-    const work = copyWork(step.work);
     totalRecomputeTokens += work.recomputeTokens;
     totalKvReadSlots += work.kvReadSlots;
     totalAttentionMacs += work.attentionMacs;
-    steps.push({
-      position,
-      token: step.token,
-      fullLogits: toNumbers(fullRow),
-      cachedLogits: toNumbers(step.logits),
-      logits,
-      hidden,
-      cacheEvents: step.cacheEvents.map(copyCacheEvent),
-      work,
-    });
+    if (report.detail === 'light') {
+      report.steps.push(lightStep(step, report.topK));
+    } else {
+      report.steps.push(fullStep(step));
+    }
   }
 
   const snapshot: CacheSnapshotLayer[] = decoder.snapshot();
@@ -313,7 +527,7 @@ export async function runExperiment(input: unknown): Promise<ExperimentResult> {
   firstDivergence = resolveFirstDivergence(firstDivergence, cache.passes, validated.tokens.length);
   const passes = firstDivergence === null;
 
-  return {
+  const metadata: Omit<ExperimentResult, 'steps' | 'comparison' | 'workSummary' | 'finalCache'> = {
     schemaVersion: 1,
     engineVersion: ENGINE_VERSION,
     mode: 'numerical',
@@ -326,22 +540,42 @@ export async function runExperiment(input: unknown): Promise<ExperimentResult> {
     },
     input: validated,
     tolerances: { atol: TOLERANCES.atol, rtol: TOLERANCES.rtol },
-    steps,
-    comparison: {
-      passes,
-      firstDivergence,
-      stepsCompared: steps.length,
-      maxAbsoluteError,
-      maxRelativeError,
-      cache,
-    },
-    workSummary: {
-      totalRecomputeTokens,
-      expectedCachedTokens: steps.length,
-      totalKvReadSlots,
-      totalAttentionMacs,
-      complexityClass: complexityFor(validated.fault),
-    },
+  };
+  const comparison: ExperimentComparison = {
+    passes,
+    firstDivergence,
+    stepsCompared: report.steps.length,
+    maxAbsoluteError,
+    maxRelativeError,
+    cache,
+  };
+  const workSummary: ExperimentWorkSummary = {
+    totalRecomputeTokens,
+    expectedCachedTokens: report.steps.length,
+    totalKvReadSlots,
+    totalAttentionMacs,
+    complexityClass: complexityFor(validated.fault),
+  };
+  if (report.detail === 'light') {
+    return {
+      ...metadata,
+      detail: 'light',
+      topK: report.topK,
+      steps: report.steps,
+      comparison,
+      workSummary,
+      finalCache: snapshot.map((layer, index) => ({
+        layer: index,
+        rows: layer.length,
+        columns: MODEL_SPEC.modelDim,
+      })),
+    };
+  }
+  return {
+    ...metadata,
+    steps: report.steps,
+    comparison,
+    workSummary,
     finalCache: snapshot.map((layer, index) => ({
       layer: index,
       rows: layer.length,
@@ -349,6 +583,23 @@ export async function runExperiment(input: unknown): Promise<ExperimentResult> {
       values: toNumbers(layer.values),
     })),
   };
+}
+
+/** Replay 0..position with cache history intact; materialize only the requested step. */
+export async function expandExperimentStep(input: unknown, position: number): Promise<ExperimentStep> {
+  const validated = validateInput(input);
+  if (typeof position !== 'number' || !Number.isInteger(position)
+    || position < 0 || position >= validated.tokens.length) {
+    throw new LabError('INPUT', 'position must be an integer within the input token sequence');
+  }
+  const prefix = validated.tokens.slice(0, position + 1);
+  const model = createModel(validated.seed);
+  const full = fullForward(model, prefix);
+  const decoder = new CachedDecoder(model, validated.fault);
+  for (let index = 0; index < position; index += 1) {
+    decoder.step(prefix[index]);
+  }
+  return fullStep(compareStep(full, decoder.step(prefix[position])));
 }
 
 /**

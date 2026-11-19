@@ -28,6 +28,127 @@ Weights and all materialized activations (embedding sums, LN outputs, projection
 
 Every compared tensor must have the expected shape and finite values. A non-finite value is an error, never a successful comparison. Compare complete vectors elementwise using abs(actual-reference) <= 1e-5 + 1e-4 * abs(reference). The Python result is the reference operand for cross-language comparisons. Do not replace this with argmax equality or a single max-relative-error metric.
 
+### Comparator boundaries
+
+`compareVectors(actual, reference, {atol, rtol})` retains the default
+`atol=1e-5`, `rtol=1e-4` and the inclusive elementwise predicate above.
+Custom tolerances must be finite and non-negative (`INPUT` otherwise).
+For each coordinate the reported relative error is zero when the absolute
+error is zero (including +0 versus -0), otherwise
+`error / max(abs(reference), atol)`. Thus exact zero with `atol=0` reports 0,
+including after JSON round-trip, never NaN. A nonzero error with zero scale
+reports positive Infinity; an overflowing ratio also remains Infinity, not
+a finite sentinel. This diagnostic does not decide the pass/fail verdict.
+Plain `JSON.stringify` serializes Infinity as null: consumers requiring a
+lossless diagnostic must encode it explicitly, not interpret null as zero.
+The default model reports retain their existing finite metrics.
+
+Finite operands alone do not guarantee finite arithmetic. If subtraction,
+`rtol * abs(reference)`, or addition of `atol` overflows, comparison throws
+`LabError('NON_FINITE')`, including for otherwise equal operands or after an
+earlier mismatch. No Infinity threshold may turn a difference into a pass.
+Representable extreme and subnormal differences are compared normally;
+there is no saturation and no change to the model's rounding boundaries.
+
+### Local operator evidence (not a new model contract)
+
+`reference/operator_bounds.py` generates the separate
+`tests/fixtures/operator-bounds-v1.json`; it neither imports TypeScript nor
+uses NumPy/BLAS or the existing 130-case decoder fixture. Inputs are first
+rounded to binary32 with Python `struct`, matching the actual operand
+values, not their ideal decimal spellings. The independent constructions are:
+
+- Dot/matrix cells: `Fraction` products and sums are exact rational arithmetic;
+  matrix reference cells are explicit row/column scalar products.
+- Softmax: **unshifted** Decimal exponentials divided by their Decimal sum,
+  unlike the production maximum-shifted binary64 implementation. Decimal's
+  exponent range accommodates these selected scores (including 1000).
+- LayerNorm: population variance is `sum(i<j, (x_i-x_j)^2) / n^2`, and the
+  numerator is `n*x_i - sum(x)`, not a translation of the centered-squares
+  production loop. Epsilon is the exact binary64 value of the literal `1e-5`.
+
+The generator uses 100 significant Decimal digits. Its self-tests check
+integer cancellation, product low bits, analytic scalar cases, translation
+and normalization, and agreement of reference values at 100 versus 160
+significant digits (relative difference below `1e-90`, exact agreement for
+zero). These are independent regression checks, not interval certificates.
+The JSON field named `exact` is a **serialized reference**: rational dot
+results can round on Decimal serialization; transcendental/normalization
+results are high-precision approximations, not exact real numbers.
+
+#### Conditional dot and matrix bounds
+
+Let `s = sum(a_i*b_i)`, `A = sum(abs(a_i*b_i))`, `u64 = 2^-53`,
+`u32 = 2^-24`, and `gamma_n = n*u64 / (1-n*u64)`. The fixture uses:
+
+- `E = gamma_n*A` for the binary64 dot result;
+- `E + u32*(abs(s)+E) + 2^-150` for a matrix cell stored in binary32.
+
+These follow the standard rounding-error product lemma (Higham, *Accuracy
+and Stability of Numerical Algorithms*, 2nd ed., Chapter 3,
+[DOI](https://doi.org/10.1137/1.9780898718027)): each term in a sequential
+sum is multiplied by at most `n` factors `(1+delta)`, `abs(delta)<=u64`;
+for `n*u64<1` their deviation from one is at most `gamma_n`. Summing the
+absolute contributions gives `E`. A final binary32 rounding contributes
+at most `u32*abs(computedSum)+2^-150`; applying
+`abs(computedSum)<=abs(s)+E` gives the second expression.
+
+Premises: valid finite binary32 operands and shapes/slices; sequential
+binary64 round-to-nearest, ties-to-even arithmetic; no overflow or binary64
+underflow in the accumulation; `n*u64<1`; and no binary32 overflow on final
+storage. Binary32 products need at most 48 significand bits and their
+nonzero magnitudes range from `2^-298` to below `2^256`, so they are exact,
+normal binary64 values, even for binary32 subnormal operands. All selected
+cases meet these premises. Binary32 storage must preserve gradual underflow
+(no flush-to-zero); `2^-150` is half the smallest binary32 subnormal spacing.
+This is an absolute error bound, not a useful relative bound near cancellation.
+In particular `[2^60, 1, -2^60]` has exact sum 1 but binary64 sum 0: its
+loose bound deliberately does not imply exact summation. Conversely the
+`[2^24, 1, -2^24]` unit-cancellation tests require exactly 1, and are meant
+to reject per-step binary32 accumulation (which gives 0).
+
+#### Scalar budgets and measurement limits
+
+For softmax and LayerNorm the fixture's
+`(u32 + 1e-13)*abs(reference) + 2^-150` is a **local regression budget**, not
+a proved forward-error bound. Its binary32 term is motivated by final
+storage rounding; the additional `1e-13` has no general theorem for the
+whole scalar pipeline. Passing it establishes only the selected outputs
+on the tested runtime. It does not establish a pre-storage relative-error
+bound or a fixed ULP guarantee for every JavaScript engine's `Math.exp`
+([ECMAScript specifies implementation-approximated exp](https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-math.exp)).
+No general LayerNorm conditioning/error bound is asserted either.
+
+Normalization is checked against the sum of these per-coordinate budgets,
+plus binary64 measurement rounding. Translation equality is tested only
+for the representable integer shift `[-2,0,2] + 1000`, whose centered scores
+are identical; arbitrary floating-point shifts can lose information.
+The extreme-gap softmax case permits tails to round/underflow to zero;
+it does not certify their relative accuracy. The `[0,-100]` case separately
+checks preservation of a binary32 subnormal tail. Constant and near-zero
+variance LayerNorm checks use the fixed positive epsilon above.
+
+The Node test converts Decimal strings to Number and adds a measurement
+guard: `budget*(1+4*Number.EPSILON) + Number.EPSILON*abs(reference)`.
+For these selected values this covers serialization/conversion and error
+measurement rounding; tiny Decimal softmax tails below binary64 range are
+already far below the absolute binary32 subnormal budget. This is not an
+interval proof for arbitrary inputs. None of these local budgets replaces
+or relaxes the model comparison's `atol=1e-5`, `rtol=1e-4`.
+
+Sources for the oracle arithmetic are Python's
+[Fraction float conversion](https://docs.python.org/3/library/fractions.html)
+and [Decimal operations](https://docs.python.org/3/library/decimal.html)
+(`from_float`, correctly rounded `exp` and `sqrt` at the active precision).
+The generator SHA256 in the new fixture ties its provenance to source bytes;
+Node tests verify that link but do not regenerate the fixture. Separately run
+`python reference/operator_bounds.py --self-test`,
+`python reference/operator_bounds.py --check tests/fixtures/operator-bounds-v1.json`,
+and `python -m unittest discover -s reference -p 'test_*.py' -v`.
+`--write NEW_PATH` is explicit exclusive creation, never an overwrite of the
+original decoder fixture or of historical evidence. A generator hash proves
+neither mathematical correctness nor independent authorship by itself.
+
 ## Deterministic weight stream
 
 Seed is an integer in [0, 4294967295], including zero. State is unsigned 32-bit. For every scalar, update state = (1664525 * state + 1013904223) modulo 2**32, then emit float32((state / 4294967296 - 0.5) * 0.6).

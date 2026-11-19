@@ -1,10 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildWeb } from './build-web.mjs';
 import { createStaticServer } from './serve-web.mjs';
+import { browserCandidates } from './browser-discovery.mjs';
+import { productChecks } from './e2e-product.mjs';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ARTIFACTS = path.join(PROJECT_ROOT, 'artifacts', 'a2');
@@ -13,6 +15,9 @@ const DIST = path.join(PROJECT_ROOT, 'apps', 'web', 'dist');
 export const SECTIONS = [
   'load',
   'baseline',
+  'worker',
+  'intent',
+  'worker-errors',
   'input',
   'fault',
   'work',
@@ -25,6 +30,7 @@ export const SECTIONS = [
   'a11y',
   'narrow',
   'motion',
+  'product',
   'perf',
   'resources',
 ];
@@ -47,13 +53,6 @@ export function summarizeReport(requested, results) {
     executed,
   };
 }
-
-const BROWSER_CANDIDATES = [
-  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-  'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
-  'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
-];
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -110,7 +109,7 @@ export function createCdp(wsUrl) {
 
     socket.addEventListener('open', () => {
       resolve({
-        send(method, params = {}) {
+        send(method, params = {}, sessionId) {
           if (closed) {
             return Promise.reject(new Error('CDP socket is closed'));
           }
@@ -131,7 +130,7 @@ export function createCdp(wsUrl) {
                 rejectSend(error);
               },
             });
-            socket.send(JSON.stringify({ id, method, params }));
+            socket.send(JSON.stringify({ id, method, params, sessionId }));
           });
         },
         onEvent(listener) {
@@ -199,42 +198,45 @@ export function createCdp(wsUrl) {
   });
 }
 
-function browserCandidates() {
-  const override = process.env.LAB_BROWSER;
-  const candidates = [];
-  if (typeof override === 'string' && override.trim().length > 0) {
-    if (!existsSync(override)) {
-      throw new Error(`LAB_BROWSER does not exist: ${override}`);
-    }
-    candidates.push(override);
-  } else {
-    for (const candidate of BROWSER_CANDIDATES) {
-      if (existsSync(candidate)) {
-        candidates.push(candidate);
-      }
-    }
-  }
-  if (candidates.length === 0) {
-    throw new Error('No Edge or Chrome found; set LAB_BROWSER to a browser executable');
-  }
-  return candidates;
-}
-
-async function waitForDevToolsPort(profile, child) {
+// Call immediately after spawn, and await ready before yielding elsewhere.
+// Keep the error guard through shutdown; the owner must dispose on every path.
+export function watchBrowserStartup(profile, child) {
   const file = path.join(profile, 'DevToolsActivePort');
   const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    try {
-      return parseDevToolsActivePort(readFileSync(file, 'utf8'));
-    } catch {
-      // Not written yet.
-    }
-    if (child.exitCode !== null) {
-      throw new Error(`browser exited before DevTools was ready (code ${child.exitCode})`);
-    }
-    await delay(100);
-  }
-  throw new Error('timed out waiting for DevToolsActivePort');
+  let timer;
+  let onError;
+  const ready = new Promise((resolve, reject) => {
+    onError = (error) => {
+      clearTimeout(timer);
+      reject(error);
+    };
+    child.on('error', onError);
+    const poll = () => {
+      if (Date.now() >= deadline) {
+        onError(new Error('timed out waiting for DevToolsActivePort'));
+        return;
+      }
+      try {
+        resolve(parseDevToolsActivePort(readFileSync(file, 'utf8')));
+        return;
+      } catch {
+        // Not written yet.
+      }
+      if (child.exitCode !== null || child.signalCode !== null) {
+        onError(new Error(`browser exited before DevTools was ready (code ${child.exitCode}, signal ${child.signalCode})`));
+        return;
+      }
+      timer = setTimeout(poll, 100);
+    };
+    poll();
+  });
+  return {
+    ready,
+    dispose() {
+      clearTimeout(timer);
+      child.off('error', onError);
+    },
+  };
 }
 
 async function fetchPageTarget(port) {
@@ -264,20 +266,20 @@ function browserUserAgent(version) {
 }
 
 async function waitForChildExit(child, timeoutMs) {
-  if (child.exitCode !== null) {
+  // A failed spawn has no PID and will never emit exit. Never wait or kill it.
+  if (!Number.isInteger(child.pid) || child.pid <= 0
+    || child.exitCode !== null || child.signalCode !== null) {
     return true;
   }
   return new Promise((resolve) => {
-    let settled = false;
+    const onExit = () => finish(true);
     const finish = (value) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        resolve(value);
-      }
+      clearTimeout(timer);
+      child.off('exit', onExit);
+      resolve(value);
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
-    child.once('exit', () => finish(true));
+    child.once('exit', onExit);
   });
 }
 
@@ -311,13 +313,14 @@ export async function runE2E(options = {}) {
     }
   }
 
+  const candidates = browserCandidates();
   mkdirSync(ARTIFACTS, { recursive: true });
   buildWeb();
-  const candidates = browserCandidates();
   const results = [];
   const screenshots = [];
   let profile = '';
   let child = null;
+  let browserStartup = null;
   let server = null;
   let cdp = null;
   let userAgent = 'unknown';
@@ -332,34 +335,45 @@ export async function runE2E(options = {}) {
     const launchErrors = [];
     for (const candidate of candidates) {
       const attemptProfile = mkdtempSync(path.join(tmpdir(), 'llm-systems-lab-e2e-'));
-      const attempt = spawn(candidate, [
-        '--headless=new',
-        '--disable-gpu',
-        '--hide-scrollbars',
-        '--no-first-run',
-        '--no-default-browser-check',
-        `--user-data-dir=${attemptProfile}`,
-        '--remote-debugging-port=0',
-        'about:blank',
-      ], { stdio: 'ignore', windowsHide: true });
+      let attempt = null;
+      let startup = null;
       try {
-        const ready = await waitForDevToolsPort(attemptProfile, attempt);
+        attempt = spawn(candidate, [
+          '--headless=new',
+          '--disable-gpu',
+          '--hide-scrollbars',
+          '--no-first-run',
+          '--no-default-browser-check',
+          `--user-data-dir=${attemptProfile}`,
+          '--remote-debugging-port=0',
+          'about:blank',
+        ], { stdio: 'ignore', windowsHide: true });
+        startup = watchBrowserStartup(attemptProfile, attempt);
+        const ready = await startup.ready;
         profile = attemptProfile;
         child = attempt;
+        browserStartup = startup;
         port = ready.port;
         break;
       } catch (error) {
         launchErrors.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
-        const exited = await waitForChildExit(attempt, 3000);
-        if (!exited) {
-          try {
-            attempt.kill();
-          } catch {
-            // Already gone.
+        if (attempt !== null) {
+          const exited = await waitForChildExit(attempt, 3000);
+          if (!exited) {
+            try {
+              attempt.kill();
+            } catch {
+              // Already gone.
+            }
+            await waitForChildExit(attempt, 2000);
           }
-          await waitForChildExit(attempt, 2000);
         }
-        await removeProfile(attemptProfile);
+      } finally {
+        // The outer finally owns only the successful attempt.
+        if (profile !== attemptProfile) {
+          startup?.dispose();
+          await removeProfile(attemptProfile);
+        }
       }
     }
     if (port === null) {
@@ -408,6 +422,11 @@ export async function runE2E(options = {}) {
     await cdp.send('Runtime.enable');
     await cdp.send('Log.enable');
     await cdp.send('Network.enable');
+    // Each dedicated worker loads modules. The browser's default 250-entry
+    // buffer would silently drop later transfers and undercount this suite.
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: "performance.setResourceTimingBufferSize(10000); window.__resourceTimingOverflow = false; performance.addEventListener('resourcetimingbufferfull', () => { window.__resourceTimingOverflow = true; });",
+    });
     const version = await cdp.send('Browser.getVersion');
     userAgent = browserUserAgent(version);
 
@@ -451,6 +470,9 @@ export async function runE2E(options = {}) {
       const clicked = await evaluate(`(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (el === null) return false;
+        for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+          if (parent instanceof HTMLDetailsElement) parent.open = true;
+        }
         el.click();
         return true;
       })()`);
@@ -463,6 +485,9 @@ export async function runE2E(options = {}) {
       const applied = await evaluate(`(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (el === null) return false;
+        for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+          if (parent instanceof HTMLDetailsElement) parent.open = true;
+        }
         const proto = el instanceof HTMLTextAreaElement
           ? HTMLTextAreaElement.prototype
           : el instanceof HTMLSelectElement
@@ -550,7 +575,49 @@ export async function runE2E(options = {}) {
       await waitFor("document.readyState === 'complete' && window.__lab?.ready === true", 15000);
     }
 
+    const workerTargets = [];
+    const attachedWorkers = new Map();
+    cdp.onEvent((message) => {
+      if (['Target.targetCreated', 'Target.targetInfoChanged'].includes(message.method)
+        && message.params.targetInfo.type === 'worker') {
+        const info = message.params.targetInfo;
+        const index = workerTargets.findIndex((target) => target.targetId === info.targetId);
+        if (index === -1) workerTargets.push(info);
+        else workerTargets[index] = info;
+      }
+      if (message.method === 'Target.attachedToTarget' && message.params.targetInfo.type === 'worker') {
+        attachedWorkers.set(message.params.sessionId, message.params.targetInfo);
+      }
+      if (message.method === 'Target.detachedFromTarget') attachedWorkers.delete(message.params.sessionId);
+    });
+    await cdp.send('Target.setDiscoverTargets', { discover: true });
+
+    async function holdWorker(action) {
+      await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+      await action();
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && attachedWorkers.size === 0) await delay(20);
+      const session = attachedWorkers.keys().next().value;
+      await expect(session !== undefined, 'no actual CDP Worker target was attached');
+      return session;
+    }
+    async function releaseWorkers() {
+      for (const session of attachedWorkers.keys()) {
+        await cdp.send('Runtime.runIfWaitingForDebugger', {}, session).catch(() => {});
+      }
+      await cdp.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+    }
+    const docFor = (seed, tokens = [1, 2, 3]) => ({
+      schemaVersion: 1, kind: 'llm-systems-lab.experiment',
+      input: { schemaVersion: 1, seed, tokens, fault: 'none' },
+      paging: { pageSize: 8, pageCount: 3, operations: [{ op: 'append', id: 'imported', tokens: 9 }] },
+    });
+
     const handlers = {
+      async product() {
+        await gotoApp();
+        return productChecks({ evaluate, click, setValue, waitFor, expect, cdp, screenshot, setViewport, holdWorker, releaseWorkers });
+      },
       async load() {
         await gotoApp();
         await setViewport(1280, 900);
@@ -602,8 +669,8 @@ export async function runE2E(options = {}) {
           `position 1 read counts: ${JSON.stringify(atOne.lanes)}`,
         );
         await expect(
-          atOne.label.includes('layer 0: 1 write, 2 reads')
-            && atOne.label.includes('layer 1: 1 write, 2 reads'),
+          /layer 0: 1 writes?, 2 reads/i.test(atOne.label)
+            && /layer 1: 1 writes?, 2 reads/i.test(atOne.label),
           `position 1 label: ${atOne.label}`,
         );
         const atTwo = await laneInfo(2);
@@ -618,6 +685,131 @@ export async function runE2E(options = {}) {
         const fingerprint = await text('#summary [data-field="fingerprint"]');
         await expect(fingerprint !== null && fingerprint.startsWith('75384d2cbebc'), `fingerprint field: ${fingerprint}`);
         return 'seed 7, six tokens: PASS with no divergence';
+      },
+
+      async worker() {
+        const before = await evaluate('window.__lab.runCount');
+        await setValue('#tokens-input', '1,4,2,8,3,9');
+        await setValue('#seed-input', '7');
+        try {
+          const session = await holdWorker(() => click('#run-button'));
+          const context = await cdp.send('Runtime.evaluate', {
+            expression: "typeof document === 'undefined' && self instanceof DedicatedWorkerGlobalScope",
+            returnByValue: true,
+          }, session);
+          await expect(context.result.value === true, 'target is not a dedicated worker global');
+          await expect(await evaluate('window.__lab.runCount') === before, 'run finished while its Worker was paused');
+          await setValue('#page-size', '16');
+          await setValue('#page-count', '4');
+          await setValue('#request-id', 'interactive');
+          await setValue('#append-tokens', '1');
+          await click('#append-button');
+          await expect(await text('#paging-summary [data-field="used-pages"]') === '1', 'paging blocked during work');
+          await click('#lang-button');
+          await expect(await attr('html', 'lang') === 'zh', 'language blocked during work');
+          await expect(await text('#run-status') === '运行中…', 'language change lost pending status');
+          await click('#lang-button');
+        } finally { await releaseWorkers(); }
+        await waitFor(`window.__lab.runCount === ${before + 1}`);
+        const observed = await evaluate('window.__lab');
+        await expect(workerTargets.some((target) => target.url.endsWith('/experiment-worker.js')),
+          `no module worker target observed: ${JSON.stringify(workerTargets)}; attached=${JSON.stringify([...attachedWorkers])}`);
+        for (const key of ['fullForwardMs', 'cachedDecoderMs', 'totalMs', 'roundTripMs']) {
+          await expect(Number.isFinite(observed[key]) && observed[key] >= 0, `invalid ${key}`);
+        }
+        await expect(observed.totalMs >= observed.fullForwardMs + observed.cachedDecoderMs, 'invalid kernel total');
+        await expect(observed.lastRunMs === observed.roundTripMs && observed.roundTripMs >= observed.totalMs,
+          'round-trip does not include core time');
+        const { runExperiment } = await import(pathToFileURL(path.join(DIST, 'packages/core/index.js')).href);
+        for (const fault of ['none', 'position-offset', 'cache-overwrite', 'mask-current-only', 'no-cache-recompute']) {
+          await runWithValidInput({ tokens: '1,4,2,8,3,9', seed: 7, fault });
+          const actual = await lastResult();
+          const expected = await runExperiment({ schemaVersion: 1, seed: 7, tokens: [1,4,2,8,3,9], fault });
+          await expect(JSON.stringify(actual) === JSON.stringify(expected), `${fault} Worker result differs from core`);
+          await expect(!Object.hasOwn(actual, 'timing'), 'timing leaked into report JSON');
+        }
+        await runWithValidInput({ tokens: '1,4,2,8,3,9', fault: 'none' });
+        return `CDP dedicated Worker observed (${workerTargets.length} targets); all faults byte-equal; paging/language usable while worker paused`;
+      },
+
+      async intent() {
+        // All intents in one browser task: earlier promises cannot complete first.
+        const attempt = (kind, value) => kind === 'run'
+          ? `document.querySelector('#seed-input').value = ${JSON.stringify(String(value))}; document.querySelector('#run-button').click();`
+          : `document.querySelector('#import-input').value = ${JSON.stringify(typeof value === 'string' ? value : JSON.stringify(value))}; document.querySelector('#import-button').click();`;
+        for (const [first, second, seed] of [
+          [['run', 11], ['run', 12], 12],
+          [['run', 13], ['import', docFor(14)], 14],
+          [['import', docFor(15)], ['run', 16], 16],
+          [['import', docFor(17)], ['import', docFor(18)], 18],
+        ]) {
+          const before = await evaluate('window.__lab.runCount');
+          await evaluate(`(() => { ${attempt(...first)} ${attempt(...second)} })()`);
+          await waitFor(`window.__lab.lastInput.seed === ${seed}`);
+          await expect(await evaluate('window.__lab.runCount') === before + 1, 'superseded result incremented runCount');
+        }
+        for (const first of [['run', 21], ['import', docFor(22)]]) {
+          for (const invalid of [['run', 'bad'], ['import', '{']]) {
+            const before = await evaluate('JSON.stringify(window.__lab.lastResult)');
+            const beforeCount = await evaluate('window.__lab.runCount');
+            await evaluate(`(() => { ${attempt(...first)} ${attempt(...invalid)} })()`);
+            const selector = invalid[0] === 'run' ? '#run-status' : '#import-status';
+            await waitFor(`document.querySelector(${JSON.stringify(selector)}).textContent.includes('INPUT')`);
+            // Cross several browser tasks after cancellation to expose stale catch/success paths.
+            await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+            await expect(await evaluate('JSON.stringify(window.__lab.lastResult)') === before, 'invalid latest intent allowed stale result');
+            await expect(await evaluate('window.__lab.runCount') === beforeCount, 'invalid latest intent changed runCount');
+            await expect(!(await text('#run-status')).includes('CANCELLED'), 'stale cancellation polluted UI');
+          }
+        }
+        await runWithValidInput({ tokens: '1,4,2,8,3,9', seed: 7 });
+        const doc = docFor(23);
+        await setValue('#import-input', JSON.stringify(doc));
+        const before = await evaluate(`({ count: window.__lab.runCount, seed: document.querySelector('#seed-input').value,
+          pages: document.querySelector('#page-map').innerHTML, size: document.querySelector('#page-size').value })`);
+        try {
+          await holdWorker(() => click('#import-button'));
+          const pending = await evaluate(`({ count: window.__lab.runCount, seed: document.querySelector('#seed-input').value,
+            pages: document.querySelector('#page-map').innerHTML, size: document.querySelector('#page-size').value })`);
+          await expect(JSON.stringify(pending) === JSON.stringify(before), 'import partially committed before its result');
+        } finally { await releaseWorkers(); }
+        await waitFor('window.__lab.lastInput.seed === 23');
+        await expect(await evaluate("document.querySelector('#seed-input').value") === '23', 'import did not commit controls');
+        await expect(await text('#paging-summary [data-field="used-pages"]') === '2', 'import did not commit paging');
+        try {
+          await holdWorker(() => click('#run-button'));
+          await evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })); window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));");
+          await expect(await attr('#status-lamp', 'data-state') !== 'running', 'pagehide cancelled work but left a permanent running state');
+          await expect(!(await text('#run-status')).includes('CANCELLED'), 'pagehide leaked stale cancellation');
+        } finally { await releaseWorkers(); }
+        await runWithValidInput({ tokens: '1,4,2,8,3,9', seed: 7 });
+        return 'run/import ordering, invalid newer intents, stale errors, atomic import and page lifecycle cancellation verified';
+      },
+
+      async 'worker-errors'() {
+        // Failure injection is confined to this isolated test page's transport;
+        // recovery must execute the original browser Worker and real numerics.
+        const countBefore = await evaluate('window.__lab.runCount');
+        await evaluate(`(() => { window.__savedWorker = window.Worker;
+          window.Worker = class { constructor() { throw new Error('C:/private/startup'); } };
+          document.querySelector('#run-button').click(); })()`);
+        try {
+          await waitFor("document.querySelector('#run-status').textContent.includes('WORKER_START')");
+          await expect(!(await text('#run-status')).includes('private'), 'startup leaked a local path');
+          await expect(await evaluate('window.__lab.runCount') === countBefore, 'failure changed runCount');
+        } finally { await evaluate('window.Worker = window.__savedWorker; delete window.__savedWorker'); }
+        await runWithValidInput({ tokens: '1,4,2,8,3,9', seed: 7 });
+        const errorReply = await evaluate(`new Promise((resolve, reject) => {
+          const worker = new Worker('./apps/web/src/experiment-worker.js', { type: 'module' });
+          const timer = setTimeout(() => { worker.terminate(); reject(Error('worker error reply timeout')); }, 5000);
+          worker.onmessage = event => { clearTimeout(timer); worker.terminate(); resolve(event.data); };
+          worker.onerror = () => { clearTimeout(timer); worker.terminate(); reject(Error('worker failed')); };
+          worker.postMessage({ kind: 'run', id: 91, input: null });
+        })`);
+        await expect(errorReply.kind === 'error' && errorReply.id === 91 && errorReply.error.code === 'INPUT',
+          'real worker did not reject malformed input');
+        await expect(!/stack|private/.test(errorReply.error.message), 'worker error leaked exception details');
+        return 'startup failure is visible and sanitized; next real Worker recovers; worker rejects invalid input';
       },
 
       async input() {
@@ -831,8 +1023,13 @@ export async function runE2E(options = {}) {
         await expect(await text('#summary-heading') === 'Result summary', `summary heading (en): ${await text('#summary-heading')}`);
         await expect(await text('#detail-heading') === 'Step detail', `detail heading (en): ${await text('#detail-heading')}`);
         await expect(await text('#summary .summary-row dt') === 'Status', `status label (en): ${await text('#summary .summary-row dt')}`);
+        await expect(await text('[data-copy="fullForwardTime"]') === 'Full-forward wall time', 'missing full-forward label');
+        await expect(await text('[data-copy="cachedDecoderTime"]') === 'Cached-decoder wall time', 'missing decoder label');
         await click('#lang-button');
         await waitFor("document.documentElement.lang === 'zh'", 5000);
+        await expect(await text('[data-copy="fullForwardTime"]') === '全量前向墙钟时间', 'missing Chinese forward label');
+        await expect(await text('[data-copy="cachedDecoderTime"]') === '缓存解码墙钟时间', 'missing Chinese decoder label');
+        await expect(await text('[data-copy="computeTime"]') === 'Worker 往返墙钟时间', 'missing Chinese round-trip label');
         await expect(await text('#run-button') === '运行对照', `run button copy: ${await text('#run-button')}`);
         await expect(await text('#lang-button') === 'English', 'toggle text did not switch to English');
         await expect(await text('#summary-heading') === '结果摘要', `summary heading (zh): ${await text('#summary-heading')}`);
@@ -848,12 +1045,11 @@ export async function runE2E(options = {}) {
           return {
             both: en !== null && zh !== null,
             visible: en !== null && zh !== null
-              && getComputedStyle(en).display !== 'none'
-              && getComputedStyle(zh).display !== 'none',
+              && en.hidden && !zh.hidden,
           };
         })()`);
         await expect(explanations.both === true, 'missing bilingual explanations');
-        await expect(explanations.visible === true, 'bilingual explanations are not both visible');
+        await expect(explanations.visible === true, 'explanation does not follow selected language');
         await evaluate('window.scrollTo(0, 0)');
         await delay(120);
         await screenshot('language-zh.png');
@@ -863,7 +1059,7 @@ export async function runE2E(options = {}) {
         await expect(await text('#summary-heading') === 'Result summary', 'did not restore the summary heading');
         await expect(await text('#summary .summary-row dt') === 'Status', 'did not restore the status label');
         await expect(['Pass', 'Diverged'].includes(await text('#summary [data-field="passes"]')), 'did not restore the summary value');
-        return 'chrome toggles while both explanation languages stay visible; summary and detail headings and the status label translate';
+        return 'selected explanation language, summary/detail headings and status translate';
       },
 
       async export() {
@@ -946,7 +1142,7 @@ export async function runE2E(options = {}) {
             }
           });
           document.querySelectorAll('button').forEach((el) => {
-            if (el.getAttribute('type') !== 'button') {
+            if (el.getAttribute('type') !== 'button' && !(el.id === 'run-button' && el.type === 'submit' && el.form?.id === 'scenario-form')) {
               problems.push((el.id ? '#' + el.id : 'button') + ' must have type="button"');
             }
           });
@@ -1101,6 +1297,23 @@ export async function runE2E(options = {}) {
           `run button focus ring at 360px: ${JSON.stringify(focus)}`);
         await delay(120);
         await screenshot('narrow.png');
+        await setViewport(375, 800);
+        for (const lang of ['en', 'zh']) {
+          if (await attr('html', 'lang') !== lang) await click('#lang-button');
+          const timingLayout = await evaluate(`(() => {
+            const fields = ['compute', 'full-forward', 'cached-decoder', 'total'];
+            return fields.every(field => {
+              const el = document.querySelector('#summary [data-field="' + field + '"]');
+              if (!el || !el.textContent.includes('ms')) return false;
+              const rect = el.parentElement.getBoundingClientRect();
+              return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth;
+            }) && document.documentElement.scrollWidth <= innerWidth + 1;
+          })()`);
+          await expect(timingLayout, `timing rows overflow or are missing at 375px (${lang})`);
+          await evaluate("document.querySelector('#summary').scrollIntoView({ block: 'start' })");
+          await screenshot(`timing-375-${lang}.png`);
+        }
+        await click('#lang-button');
         await setViewport(640, 800);
         await delay(150);
         overflow = await evaluate('document.documentElement.scrollWidth - window.innerWidth');
@@ -1110,7 +1323,7 @@ export async function runE2E(options = {}) {
         overflow = await evaluate('document.documentElement.scrollWidth - window.innerWidth');
         await expect(overflow <= 1, `horizontal overflow at 1024px: ${overflow}`);
         await setViewport(1280, 900);
-        return 'shell complete, 64 columns, visible focus ring and no overflow at 360/640/1024px';
+        return 'shell complete, 64 columns, visible focus ring; bilingual timing at 375px; no overflow at 360/375/640/1024px';
       },
 
       async motion() {
@@ -1193,6 +1406,11 @@ export async function runE2E(options = {}) {
       },
 
       async resources() {
+        const sessionTransfer = await evaluate("performance.getEntriesByType('resource').reduce((sum,e)=>sum+e.transferSize,0)");
+        // Budget one cold app load, not an unbounded number of intentional Worker reruns.
+        // Global error/network listeners remain active across this navigation.
+        await gotoApp();
+        await expect(await evaluate('window.__resourceTimingOverflow === false'), 'resource timing buffer overflowed');
         const resources = await evaluate(`(() => {
           const entries = performance.getEntriesByType('resource').map((entry) => ({
             url: entry.name,
@@ -1220,7 +1438,7 @@ export async function runE2E(options = {}) {
         await expect(externalRequests.length === 0, `external requests: ${externalRequests.join(', ')}`);
         await expect(exceptions.length === 0, `page exceptions: ${exceptions.join(' | ')}`);
         await expect(consoleErrors.length === 0, `console errors: ${consoleErrors.join(' | ')}`);
-        return `${resources.entries.length} local resources, ${resources.total} bytes, no errors`;
+        return `${resources.entries.length} cold-load local resources, ${resources.total} bytes (2 MiB budget); prior reruns transferred ${sessionTransfer} bytes; no errors`;
       },
     };
 
@@ -1258,6 +1476,7 @@ export async function runE2E(options = {}) {
         await waitForChildExit(child, 2000);
       }
     }
+    browserStartup?.dispose();
     if (server !== null) {
       await closeServer(server);
     }
@@ -1305,7 +1524,7 @@ if (process.argv[1] !== undefined) {
       }
       const passed = report.results.filter((result) => result.ok).length;
       console.log(
-        `e2e: ${report.full ? 'PASS' : 'PARTIAL'} (${passed}/${report.results.length} requested sections; full acceptance set is ${SECTIONS.length})`,
+        `e2e: ${report.ok ? 'PASS' : report.full ? 'FAIL' : 'PARTIAL'} (${passed}/${report.results.length} requested sections; full acceptance set is ${SECTIONS.length})`,
       );
       if (!report.full) {
         console.log('partial runs are for debugging only and are not acceptance evidence');

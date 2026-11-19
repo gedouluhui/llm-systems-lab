@@ -12,11 +12,15 @@ test('buildWeb produces a self-contained static bundle under the budget', () => 
   assert.ok(existsSync(join(dist, 'index.html')));
   assert.ok(existsSync(join(dist, 'styles.css')));
   assert.ok(existsSync(join(dist, 'apps', 'web', 'src', 'main.js')));
+  assert.ok(existsSync(join(dist, 'apps', 'web', 'src', 'experiment-worker.js')));
   assert.ok(result.totalBytes > 0);
   assert.ok(result.totalBytes <= WEB_MAX_BYTES, `${result.totalBytes} bytes`);
 
   const html = readFileSync(join(dist, 'index.html'), 'utf8');
   assert.match(html, /Content-Security-Policy/);
+  for (const directive of ["worker-src 'self'", "default-src 'self'", "script-src 'self'",
+    "style-src 'self'", "img-src 'self' data:", "connect-src 'self'", "object-src 'none'",
+    "base-uri 'none'", "form-action 'none'"]) assert.ok(html.includes(directive), directive);
   assert.match(html, /type="module"/);
   assert.match(html, /src="\.\/apps\/web\/src\/main\.js"/);
   assert.equal(/https?:\/\//.test(html), false, 'no external URLs in HTML');

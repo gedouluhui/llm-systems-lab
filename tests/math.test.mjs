@@ -2,14 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { dot, layerNorm, matmul, softmaxRow } from '../dist/packages/core/index.js';
 
-function close(actual, expected, label) {
-  assert.ok(Math.abs(actual - expected) <= 1e-5 + 1e-4 * Math.abs(expected),
-    `${label}: ${actual} vs ${expected}`);
-}
-
-test('dot multiplies and accumulates in double precision', () => {
-  assert.equal(typeof dot, 'function', 'dot is unavailable');
+test('dot multiplies small integer vectors', () => {
   assert.equal(dot(new Float32Array([1, 2, 3]), 0, new Float32Array([4, 5, 6]), 0, 3), 32);
+});
+
+test('dot preserves the unit term through f64 cancellation', () => {
+  const a = new Float32Array([16777216, 1, -16777216]);
+  const b = new Float32Array([1, 1, 1]);
+  assert.equal(dot(a, 0, b, 0, 3), 1);
+});
+
+test('matmul preserves the unit term through f64 cancellation', () => {
+  const a = new Float32Array([16777216, 1, -16777216]);
+  const b = new Float32Array([1, 1, 1]);
+  assert.equal(matmul(a, 1, 3, b, 1)[0], 1);
 });
 
 test('layerNorm matches an independently computed scalar example', () => {
@@ -55,8 +61,9 @@ test('matmul multiplies row-major matrices with double accumulation', () => {
 });
 
 test('matmul results stay finite for large-but-representable inputs', () => {
-  const values = new Float32Array(16).fill(0.25);
-  const weights = new Float32Array(16).fill(0.5);
-  const product = matmul(values, 1, 16, weights, 1);
-  close(product[0], 2, 'product');
+  const values = new Float32Array([2 ** 60, 2 ** 60]);
+  const weights = new Float32Array([2 ** 60, 2 ** 60]);
+  const product = matmul(values, 1, 2, weights, 1);
+  assert.ok(Number.isFinite(product[0]));
+  assert.equal(product[0], 2 ** 121);
 });

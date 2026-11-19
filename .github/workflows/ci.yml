@@ -4,13 +4,23 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  linux:
-    runs-on: ubuntu-latest
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -21,28 +31,41 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # Provenance hashes use LF bytes; a Windows checkout may produce CRLF.
+      # Normalize only line endings, never regenerate the reference or its hashes.
+      - name: Normalize reference source line endings
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for name in ("decoder.py", "generate_cases.py"):
+              source = Path("reference") / name
+              source.write_bytes(source.read_bytes().replace(b"\r\n", b"\n"))
+          PY
       - name: Install Python reference dependency
         run: python -m pip install "numpy>=2,<3"
       - name: Install Node dependencies
         run: npm ci
+      - name: Install workflow test dependency
+        run: python -m pip install "PyYAML==6.0.2"
+      - name: Workflow contracts
+        run: python tests/ci-contract.test.py -v
       - name: Node and TypeScript tests
         run: npm test
       - name: Eight-stage verification gate
-        run: node scripts/verify.mjs
-      - name: Locate a Chromium browser
         run: |
-          BROWSER="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
-          test -n "$BROWSER"
-          echo "LAB_BROWSER=$BROWSER" >> "$GITHUB_ENV"
+          mkdir -p artifacts
+          node scripts/verify.mjs 2>&1 | tee artifacts/verify.log
       - name: Browser E2E
         run: node scripts/e2e-web.mjs
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: evidence
+          name: evidence-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
+          include-hidden-files: false
           path: |
-            artifacts/a2/
+            artifacts/a2/e2e.json
+            artifacts/a2/*.png
             artifacts/verify-receipt.json
             artifacts/verify.log

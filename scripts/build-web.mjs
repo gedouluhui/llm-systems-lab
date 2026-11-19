@@ -54,6 +54,9 @@ function validateDist() {
   if (!existsSync(path.join(DIST, 'apps', 'web', 'src', 'main.js'))) {
     throw new Error('web build is missing apps/web/src/main.js');
   }
+  if (!existsSync(path.join(DIST, 'apps', 'web', 'src', 'experiment-worker.js'))) {
+    throw new Error('web build is missing apps/web/src/experiment-worker.js');
+  }
   const files = walk(DIST);
   let totalBytes = 0;
   for (const relative of files) {
