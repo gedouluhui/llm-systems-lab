@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStaticServer, resolveRequestPath } from '../scripts/serve-web.mjs';
 
 test('resolveRequestPath serves only files under the root', () => {
-  const root = mkdtempSync(join(tmpdir(), 'web-root-'));
+  // macOS resolves /var to /private/var; the server returns real paths.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'web-root-')));
   mkdirSync(join(root, 'sub'));
   writeFileSync(join(root, 'index.html'), '<!doctype html>');
   writeFileSync(join(root, 'sub', 'app.js'), 'export {};');
@@ -33,7 +34,8 @@ test('resolveRequestPath serves only files under the root', () => {
 });
 
 test('server sets security headers and rejects non-read methods', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'web-root-'));
+  // macOS resolves /var to /private/var; the server returns real paths.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'web-root-')));
   writeFileSync(join(root, 'index.html'), '<!doctype html><title>lab</title>');
   const server = createStaticServer(root);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
