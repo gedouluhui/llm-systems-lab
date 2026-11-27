@@ -25,7 +25,9 @@ npm run build && node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9 --fault 
 预期：报告指出 position 1 发生分歧；退出码 1。
 
 ### 证据与覆盖边界
-证据包括 100 项 TypeScript 测试及 130 个独立 NumPy fixture 用例、18 项 Web 测试、6 个变异体检查、16 个浏览器 E2E 场景，以及 scripts/verify.mjs 八阶段总验收。这些是冻结的小型解码器契约的回归与集成证据，不是对所有输入的证明，也不是模型质量测量。
+<!-- verification-evidence:start -->
+证据包括 231/231 项 TypeScript 测试及 130 个独立 NumPy fixture 用例、23/23 项 Web 测试、18/18 项 Python 测试、11/11 个变异体、20/20 个浏览器 E2E 场景，以及 scripts/verify.mjs 八阶段总验收。这些是冻结的小型解码器契约的回归与集成证据，不是对所有输入的证明，也不是模型质量测量。
+<!-- verification-evidence:end -->
 
 ### 支持状态
 当前版本 0.1.0-a1 是 A3 公开测试版。支持环境：Node.js >= 22.18.0；仅在运行参考测试时需要 Python 3 与 NumPy；浏览器 E2E 需要本机 Edge 或 Chrome。维护为尽力而为，不提供 SLA 或生产支持承诺。

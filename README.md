@@ -30,7 +30,7 @@
 - 三种分歧故障注入，外加 `no-cache-recompute` 精确对照与确定性工作量台账
 - 130 用例的独立 NumPy 参考 fixture
 - CLI：`run` / `replay` / `demo`
-- 源代码变异检查：6 个变异体全部被指定测试抓住
+- 源代码变异检查：11 个变异体全部被指定测试抓住
 - A2 浏览器教学界面：逐位置 capture bar、步骤详情、KV cache 槽位、单请求分页实验、实验文档导出/导入、中英切换、键盘操作、窄屏与减弱动画
 - `scripts/verify.mjs` 八阶段总验收：构建、Web 构建、TypeScript 测试、Web 测试、Python 参考测试、fixture 溯源、变异检查、打包冒烟
 - A3 发布：MIT 许可证、CI 与 GitHub Pages 工作流、真实界面截图；[在线演示](https://gedouluhui.github.io/llm-systems-lab/) 与 [GitHub 仓库](https://github.com/gedouluhui/llm-systems-lab) 均已上线
@@ -51,7 +51,7 @@
 ```bash
 npm install
 npm run build
-npm test                     # 100 个测试，含 130 用例跨语言参考比对
+npm test                     # 231 个测试，含 130 用例跨语言参考比对
 
 # 人读演示：正常路径通过，三种分歧故障都在 position 1 被抓到
 node dist/src/cli.js demo
@@ -60,7 +60,7 @@ node dist/src/cli.js demo
 node scripts/build-web.mjs
 node scripts/serve-web.mjs   # http://127.0.0.1:4173
 
-# 浏览器端 E2E：16 个场景，使用隔离的临时浏览器配置
+# 浏览器端 E2E：20 个场景，使用隔离的临时浏览器配置
 npm run e2e:web
 ```
 
@@ -169,9 +169,9 @@ snapshot.wasteBytes;        // 3840
 
 ```bash
 python -m unittest discover -s reference -p "test_*.py"   # 18 个 NumPy 自测
-node scripts/mutation-check.mjs                           # 6/6 变异体被抓住
+node scripts/mutation-check.mjs                           # 11/11 变异体被抓住
 node scripts/verify.mjs                                   # 八阶段串行总验收
-# 浏览器端 E2E：16 个场景，使用隔离的临时浏览器配置
+# 浏览器端 E2E：20 个场景，使用隔离的临时浏览器配置
 npm run e2e:web
 ```
 
@@ -179,12 +179,12 @@ npm run e2e:web
 
 1. TypeScript 构建
 2. Web 构建：编译浏览器代码，校验 2 MiB 预算、HTML shell 中必需的 CSP 指令与无绝对 URL（这是必需的指令级检查，不是“CSP 无法被削弱”的穷举证明；同源与无控制台错误由浏览器 E2E 单独断言）
-3. 全部 TypeScript 测试（串行，100 个）
-4. Web 测试（3 个文件、18 个用例；零文件或数量下降都会失败）
+3. 全部 TypeScript 测试（串行，231 个）
+4. Web 测试（4 个文件、23 个用例；零文件或数量下降都会失败）
 5. Python 参考自测
 6. fixture 溯源（源码哈希、模型 ID、schema、用例数）
 7. 源代码变异检查
-8. `npm pack` 打包冒烟：解包到全新目录，在没有源码和 Python 的环境里运行 CLI，并检查 tarball 只含 `package.json`、`README.md`、`LICENSE` 与 `dist/`
+8. `npm pack` 打包冒烟：解包到全新目录，在没有源码和 Python 的环境里运行 CLI，并检查 tarball 只含 `package.json`、两份 README、`LICENSE` 与 `dist/`
 
 总验收只在结果确定后写 `artifacts/verify-receipt.json`（已忽略），记录各步骤结果、哈希，以及 `web: { bytes, files, tests }`。负向对照：`WEB_MAX_BYTES=1 node scripts/verify.mjs` 必须在 web-build 阶段失败。
 
@@ -245,7 +245,7 @@ A pure-accounting KV paging simulator (lowest-free-page allocation, atomic OOM f
 
 ### Status: A3 public beta
 
-Implemented: frozen numerical contract, deterministic weights, full and cached paths, three divergent faults plus the exact `no-cache-recompute` control, a deterministic work ledger, a 130-case independent fixture, the `run` / `replay` / `demo` CLI, a six-mutant source mutation check, and a static browser lab with a per-position capture bar, step detail, KV cache slots, a single-request paging experiment, experiment export/import, English/Chinese chrome, keyboard operation, narrow layout and reduced motion. The serial `scripts/verify.mjs` gate now has eight stages, including the web build and web tests. A3 release adds the MIT license, CI and GitHub Pages workflows, and real UI screenshots. The [live demo](https://gedouluhui.github.io/llm-systems-lab/) and the [repository](https://github.com/gedouluhui/llm-systems-lab) are published.
+Implemented: frozen numerical contract, deterministic weights, full and cached paths, three divergent faults plus the exact `no-cache-recompute` control, a deterministic work ledger, a 130-case independent fixture, the `run` / `replay` / `demo` CLI, an eleven-mutant source mutation check, and a static browser lab with a per-position capture bar, step detail, KV cache slots, a single-request paging experiment, experiment export/import, English/Chinese chrome, keyboard operation, narrow layout and reduced motion. The serial `scripts/verify.mjs` gate now has eight stages, including the web build and web tests. A3 release adds the MIT license, CI and GitHub Pages workflows, and real UI screenshots. The [live demo](https://gedouluhui.github.io/llm-systems-lab/) and the [repository](https://github.com/gedouluhui/llm-systems-lab) are published.
 
 Not included: training or model-quality evaluation, real GPU memory/throughput measurement, real user testing or user studies. The project makes no claim of model quality, speed, visual quality or learning effectiveness.
 
@@ -261,7 +261,7 @@ Real build, headless Edge 157 at 1280×900; not mockups. Environment and limits 
 ```bash
 npm install
 npm run build
-npm test                     # 100 tests, including the 130-case cross-language comparison
+npm test                     # 231 tests, including the 130-case cross-language comparison
 node dist/src/cli.js demo
 node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9
 node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9 --fault cache-overwrite
@@ -271,7 +271,7 @@ node scripts/verify.mjs
 # Static teaching lab (two terminals); requires Edge or Chrome for E2E
 node scripts/build-web.mjs
 node scripts/serve-web.mjs   # http://127.0.0.1:4173
-npm run e2e:web              # 16 browser scenarios, isolated temporary browser profile
+npm run e2e:web              # 20 browser scenarios, isolated temporary browser profile
 ```
 
 `run` prints one line of stable JSON and exits 0 on numerical agreement, 1 on divergence, and 2 on invalid input. `replay` re-runs the recorded input, ignores recorded step results, and verifies the weight fingerprint.
@@ -315,7 +315,7 @@ The first three are identical to the correct path at position 0, so detection mu
 
 ### Verification
 
-`scripts/verify.mjs` runs eight stages serially: build, web build, TypeScript tests (100), web tests (18 across three files), Python reference tests, fixture provenance, a six-mutant source-mutation check, and a packed-artifact smoke test. The web build asserts the 2 MiB budget, the required CSP directives in the HTML shell, and the absence of absolute URLs in that shell; it is a required-directive check, not a proof that the policy cannot be weakened later, and the browser E2E separately asserts that every loaded resource is same-origin and that the console is error-free. Web tests fail closed if no web test file exists or the count drops. Missing components or non-zero exits fail the gate; nothing is silently skipped. Mutants count only when the build succeeds and a named test fails. The mutation runner has its own tests covering CAUGHT, MISSED, NOP, BUILD-FAIL, WRONG-FAILURE, non-unique targets, and missing targets. Negative control: `WEB_MAX_BYTES=1 node scripts/verify.mjs` must fail at the web-build stage.
+`scripts/verify.mjs` runs eight stages serially: build, web build, TypeScript tests (231), web tests (23 across four files), Python reference tests, fixture provenance, an eleven-mutant source-mutation check, and a packed-artifact smoke test. The web build asserts the 2 MiB budget, the required CSP directives in the HTML shell, and the absence of absolute URLs in that shell; it is a required-directive check, not a proof that the policy cannot be weakened later, and the browser E2E separately asserts that every loaded resource is same-origin and that the console is error-free. Web tests fail closed if no web test file exists or the count drops. Missing components or non-zero exits fail the gate; nothing is silently skipped. Mutants count only when the build succeeds and a named test fails. The mutation runner has its own tests covering CAUGHT, MISSED, NOP, BUILD-FAIL, WRONG-FAILURE, non-unique targets, and missing targets. Negative control: `WEB_MAX_BYTES=1 node scripts/verify.mjs` must fail at the web-build stage.
 
 ### Limitations
 
@@ -352,7 +352,9 @@ npm run build && node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9 --fault 
 Expected: The report identifies a divergence at position 1 and exits 1.
 
 ### Evidence and coverage boundaries
-Evidence includes 100 TypeScript tests with a 130-case independent NumPy fixture, 18 web tests, a six-mutant check, 16 browser E2E scenarios, and the eight-stage scripts/verify.mjs gate. These are regression and integration checks for the frozen tiny-decoder contract, not a proof for all inputs or a measure of model quality.
+<!-- verification-evidence:start -->
+Evidence includes 231/231 TypeScript tests with a 130-case independent NumPy fixture, 23/23 web tests, 18/18 Python tests, 11/11 mutants, and 20/20 browser E2E sections. These are regression and integration checks for the frozen tiny-decoder contract, not a proof for all inputs or a measure of model quality.
+<!-- verification-evidence:end -->
 
 ### Support status
 Version 0.1.0-a1 is an A3 public beta. Supported syntax/runtime: Node.js >= 22.18.0; Python 3 with NumPy is needed only for reference tests; browser E2E requires a local Edge or Chrome installation. Maintenance is best-effort with no SLA or production-support commitment.

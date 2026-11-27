@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -190,6 +191,35 @@ class CIContract(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             check_receipt(sandbox, result)
+
+    def test_readme_counts_match_verification_receipt(self):
+        receipt_path = ROOT / "artifacts/verify-receipt.json"
+        e2e_path = ROOT / "artifacts/a2/e2e.json"
+        if not receipt_path.is_file() or not e2e_path.is_file():
+            self.skipTest("receipts are generated later in CI; the E2E command enforces docs after writing them")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        self.assertTrue(receipt["ok"])
+        stages = {stage["name"]: stage for stage in receipt["stages"]}
+        typescript = re.search(r"(\d+)/(\d+) tests passed", stages["typescript-tests"]["detail"])
+        web = re.search(r"(\d+)/(\d+) web tests passed", stages["web-tests"]["detail"])
+        python = re.search(r"(\d+) tests passed", stages["python-reference-tests"]["detail"])
+        mutants = re.search(r"(\d+)/(\d+) mutants caught", stages["source-mutation"]["detail"])
+        e2e = json.loads(e2e_path.read_text(encoding="utf-8"))
+        self.assertTrue(e2e["ok"] and e2e["full"])
+        e2e_passed = sum(result["ok"] for result in e2e["results"])
+        self.assertEqual(e2e_passed, len(e2e["requested"]))
+        counts = {
+            "typescript": f"{typescript[1]}/{typescript[2]}",
+            "web": f"{web[1]}/{web[2]}",
+            "python": python[1],
+            "mutants": f"{mutants[1]}/{mutants[2]}",
+            "e2e": str(e2e_passed),
+        }
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme_zh = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+        for name, count in counts.items():
+            self.assertIn(count, readme, f"README.md is missing the receipt-derived {name} count")
+            self.assertIn(count, readme_zh, f"README.zh-CN.md is missing the receipt-derived {name} count")
 
     def test_real_verify_budget_failure_is_not_swallowed_by_tee(self):
         def check(sandbox, result):

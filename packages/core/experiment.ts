@@ -15,8 +15,9 @@ import {
   type StepWorkStats,
 } from './decoder.js';
 import { createModel, weightsFingerprint } from './model.js';
+import { ENGINE_VERSION } from '../../src/version.js';
 
-export const ENGINE_VERSION = '0.1.0-a1';
+export { ENGINE_VERSION } from '../../src/version.js';
 
 export const TOLERANCES = Object.freeze({ atol: 1e-5, rtol: 1e-4 });
 

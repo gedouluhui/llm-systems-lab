@@ -21,6 +21,7 @@ const USAGE = [
   'usage: llm-systems-lab run --seed N --tokens 1,2,3 [--fault MODE]',
   '       llm-systems-lab replay FILE',
   '       llm-systems-lab demo',
+  '       llm-systems-lab --version',
   `faults: ${FAULTS.join(', ')}`,
 ].join('\n');
 
@@ -227,7 +228,11 @@ async function main(argv: readonly string[]): Promise<number> {
   if (command === 'demo') {
     return commandDemo(rest);
   }
-  throw new LabError('INPUT', `unknown command; expected run, replay, or demo\n${USAGE}`);
+  if (command === '--version' && rest.length === 0) {
+    process.stdout.write(`${ENGINE_VERSION}\n`);
+    return 0;
+  }
+  throw new LabError('INPUT', `unknown command; expected run, replay, demo, or --version\n${USAGE}`);
 }
 
 try {

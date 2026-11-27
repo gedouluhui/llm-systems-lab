@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildWeb } from './build-web.mjs';
 import { createStaticServer } from './serve-web.mjs';
@@ -1534,7 +1534,24 @@ if (process.argv[1] !== undefined) {
       if (!report.full) {
         console.log('partial runs are for debugging only and are not acceptance evidence');
       }
-      process.exitCode = report.ok ? 0 : 1;
+      if (report.ok) {
+        const docs = spawnSync(process.execPath, [path.join(PROJECT_ROOT, 'scripts', 'check-doc-counts.mjs')], {
+          cwd: PROJECT_ROOT,
+          encoding: 'utf8',
+          timeout: 30000,
+          windowsHide: true,
+        });
+        if (docs.stdout) process.stdout.write(docs.stdout);
+        if (docs.status !== 0) {
+          if (docs.stderr) process.stderr.write(docs.stderr);
+          console.error('documentation counts or release metadata do not match verification evidence');
+          process.exitCode = 1;
+        } else {
+          process.exitCode = 0;
+        }
+      } else {
+        process.exitCode = 1;
+      }
     } catch (error) {
       mkdirSync(ARTIFACTS, { recursive: true });
       const detail = error instanceof Error ? error.message : String(error);
