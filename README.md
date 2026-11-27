@@ -328,3 +328,34 @@ MIT. See [LICENSE](LICENSE).
 ### Feedback and contributions
 
 Use GitHub Issues for public-beta feedback; read [CONTRIBUTING.md](CONTRIBUTING.md) first. Do not paste secrets, private data or personal paths into an issue.
+
+## Quickstart and support
+
+### Problem
+Turn the numerical correctness of a tiny LLM inference system into executable evidence across full-prefix decoding, incremental KV caching, fault injection, and logical paging.
+
+### Install
+```sh
+npm install
+```
+
+### Success
+```sh
+npm run build && node dist/src/cli.js demo
+```
+Expected: The normal path passes and each injected divergence is caught at position 1; exit 0.
+
+### Deliberate failure
+```sh
+npm run build && node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9 --fault cache-overwrite
+```
+Expected: The report identifies a divergence at position 1 and exits 1.
+
+### Evidence and coverage boundaries
+Evidence includes 100 TypeScript tests with a 130-case independent NumPy fixture, 18 web tests, a six-mutant check, 16 browser E2E scenarios, and the eight-stage scripts/verify.mjs gate. These are regression and integration checks for the frozen tiny-decoder contract, not a proof for all inputs or a measure of model quality.
+
+### Support status
+Version 0.1.0-a1 is an A3 public beta. Supported syntax/runtime: Node.js >= 22.18.0; Python 3 with NumPy is needed only for reference tests; browser E2E requires a local Edge or Chrome installation. Maintenance is best-effort with no SLA or production-support commitment.
+
+### Limitations
+Weights are untrained; paging is logical byte accounting rather than measured VRAM; browser evidence is from headless Edge on Windows; timings are JavaScript compute time; the 130 cases are regression evidence, not a universal correctness proof. CLI and export interfaces may change before 1.0.
