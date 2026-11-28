@@ -58,6 +58,21 @@ class CIContract(unittest.TestCase):
         self.assertEqual(len(matches), 1, name)
         return matches[0]
 
+    def action_step(self, steps, action):
+        matches = [step for step in steps if step.get("uses", "").startswith(action + "@")]
+        self.assertEqual(len(matches), 1, action)
+        uses = matches[0]["uses"]
+        self.assertRegex(uses.split("@", 1)[1].split()[0], r"^[0-9a-f]{40}$")
+        return matches[0]
+
+    def test_all_external_actions_are_pinned_to_commit_shas(self):
+        for workflow in (self.ci, self.pages):
+            for job in workflow["jobs"].values():
+                for step in job.get("steps", []):
+                    uses = step.get("uses")
+                    if uses and not uses.startswith("./"):
+                        self.assertRegex(uses.split("@", 1)[1].split()[0], r"^[0-9a-f]{40}$", uses)
+
     def test_all_three_systems_are_required_without_fail_fast(self):
         job = self.matrix_job()
         self.assertEqual(job["strategy"], {
@@ -103,9 +118,10 @@ class CIContract(unittest.TestCase):
             "mkdir -p artifacts", "node scripts/verify.mjs 2>&1 | tee artifacts/verify.log",
         ])
         self.assertEqual(self.step("Browser E2E")["run"], "node scripts/e2e-web.mjs")
-        setup = {step.get("uses"): step for step in steps if "uses" in step}
-        self.assertEqual(setup["actions/setup-node@v4"]["with"]["node-version"], "22.18.0")
-        self.assertEqual(setup["actions/setup-python@v5"]["with"]["python-version"], "3.12")
+        setup_node = self.action_step(steps, "actions/setup-node")
+        setup_python = self.action_step(steps, "actions/setup-python")
+        self.assertEqual(setup_node["with"]["node-version"], "22.18.0")
+        self.assertEqual(setup_python["with"]["python-version"], "3.12")
 
     def test_crlf_checkout_matches_provenance_without_concealing_source_edits(self):
         fixture = json.loads((ROOT / "tests/fixtures/reference.json").read_text(encoding="utf-8"))
@@ -144,7 +160,7 @@ class CIContract(unittest.TestCase):
     def test_evidence_upload_is_always_os_unique_and_allowlisted(self):
         step = self.step("Upload evidence")
         self.assertEqual(step["if"], "always()")
-        self.assertEqual(step["uses"], "actions/upload-artifact@v4")
+        self.assertEqual(step, self.action_step(self.matrix_job()["steps"], "actions/upload-artifact"))
         options = step["with"]
         self.assertEqual(options["name"], "evidence-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}")
         self.assertEqual(options.get("include-hidden-files", "false"), "false")
@@ -165,7 +181,7 @@ class CIContract(unittest.TestCase):
         self.assertNotIn("continue-on-error", deploy)
         self.assertEqual(deploy["permissions"], {"contents": "read", "pages": "write", "id-token": "write"})
         self.assertEqual(deploy["environment"]["name"], "github-pages")
-        self.assertEqual(deploy["steps"][-1]["uses"], "actions/deploy-pages@v4")
+        self.assertEqual(deploy["steps"][-1], self.action_step(deploy["steps"], "actions/deploy-pages"))
 
     def run_real_gate(self, step_name, injected_env, check_receipt):
         if posix_bash() is None:
