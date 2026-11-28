@@ -26,7 +26,7 @@ npm run build && node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9 --fault 
 
 ### 证据与覆盖边界
 <!-- verification-evidence:start -->
-证据包括 231/231 项 TypeScript 测试及 130 个独立 NumPy fixture 用例、23/23 项 Web 测试、18/18 项 Python 测试、11/11 个变异体、20/20 个浏览器 E2E 场景，以及 scripts/verify.mjs 八阶段总验收。这些是冻结的小型解码器契约的回归与集成证据，不是对所有输入的证明，也不是模型质量测量。
+证据包括 235/235 项 TypeScript 测试及 130 个独立 NumPy fixture 用例、23/23 项 Web 测试、18/18 项 Python 测试、11/11 个变异体、20/20 个浏览器 E2E 场景，以及 scripts/verify.mjs 八阶段总验收。这些是冻结的小型解码器契约的回归与集成证据，不是对所有输入的证明，也不是模型质量测量。
 <!-- verification-evidence:end -->
 
 ### 支持状态

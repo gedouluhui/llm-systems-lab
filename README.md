@@ -51,7 +51,7 @@
 ```bash
 npm install
 npm run build
-npm test                     # 231 个测试，含 130 用例跨语言参考比对
+npm test                     # 235 个测试，含 130 用例跨语言参考比对
 
 # 人读演示：正常路径通过，三种分歧故障都在 position 1 被抓到
 node dist/src/cli.js demo
@@ -179,7 +179,7 @@ npm run e2e:web
 
 1. TypeScript 构建
 2. Web 构建：编译浏览器代码，校验 2 MiB 预算、HTML shell 中必需的 CSP 指令与无绝对 URL（这是必需的指令级检查，不是“CSP 无法被削弱”的穷举证明；同源与无控制台错误由浏览器 E2E 单独断言）
-3. 全部 TypeScript 测试（串行，231 个）
+3. 全部 TypeScript 测试（串行，235 个）
 4. Web 测试（4 个文件、23 个用例；零文件或数量下降都会失败）
 5. Python 参考自测
 6. fixture 溯源（源码哈希、模型 ID、schema、用例数）
@@ -261,7 +261,7 @@ Real build, headless Edge 157 at 1280×900; not mockups. Environment and limits 
 ```bash
 npm install
 npm run build
-npm test                     # 231 tests, including the 130-case cross-language comparison
+npm test                     # 235 tests, including the 130-case cross-language comparison
 node dist/src/cli.js demo
 node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9
 node dist/src/cli.js run --seed 7 --tokens 1,4,2,8,3,9 --fault cache-overwrite
@@ -315,7 +315,7 @@ The first three are identical to the correct path at position 0, so detection mu
 
 ### Verification
 
-`scripts/verify.mjs` runs eight stages serially: build, web build, TypeScript tests (231), web tests (23 across four files), Python reference tests, fixture provenance, an eleven-mutant source-mutation check, and a packed-artifact smoke test. The web build asserts the 2 MiB budget, the required CSP directives in the HTML shell, and the absence of absolute URLs in that shell; it is a required-directive check, not a proof that the policy cannot be weakened later, and the browser E2E separately asserts that every loaded resource is same-origin and that the console is error-free. Web tests fail closed if no web test file exists or the count drops. Missing components or non-zero exits fail the gate; nothing is silently skipped. Mutants count only when the build succeeds and a named test fails. The mutation runner has its own tests covering CAUGHT, MISSED, NOP, BUILD-FAIL, WRONG-FAILURE, non-unique targets, and missing targets. Negative control: `WEB_MAX_BYTES=1 node scripts/verify.mjs` must fail at the web-build stage.
+`scripts/verify.mjs` runs eight stages serially: build, web build, TypeScript tests (235), web tests (23 across four files), Python reference tests, fixture provenance, an eleven-mutant source-mutation check, and a packed-artifact smoke test. The web build asserts the 2 MiB budget, the required CSP directives in the HTML shell, and the absence of absolute URLs in that shell; it is a required-directive check, not a proof that the policy cannot be weakened later, and the browser E2E separately asserts that every loaded resource is same-origin and that the console is error-free. Web tests fail closed if no web test file exists or the count drops. Missing components or non-zero exits fail the gate; nothing is silently skipped. Mutants count only when the build succeeds and a named test fails. The mutation runner has its own tests covering CAUGHT, MISSED, NOP, BUILD-FAIL, WRONG-FAILURE, non-unique targets, and missing targets. Negative control: `WEB_MAX_BYTES=1 node scripts/verify.mjs` must fail at the web-build stage.
 
 ### Limitations
 
@@ -353,7 +353,7 @@ Expected: The report identifies a divergence at position 1 and exits 1.
 
 ### Evidence and coverage boundaries
 <!-- verification-evidence:start -->
-Evidence includes 231/231 TypeScript tests with a 130-case independent NumPy fixture, 23/23 web tests, 18/18 Python tests, 11/11 mutants, and 20/20 browser E2E sections. These are regression and integration checks for the frozen tiny-decoder contract, not a proof for all inputs or a measure of model quality.
+Evidence includes 235/235 TypeScript tests with a 130-case independent NumPy fixture, 23/23 web tests, 18/18 Python tests, 11/11 mutants, and 20/20 browser E2E sections. These are regression and integration checks for the frozen tiny-decoder contract, not a proof for all inputs or a measure of model quality.
 <!-- verification-evidence:end -->
 
 ### Support status
