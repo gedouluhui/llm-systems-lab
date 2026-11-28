@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -150,10 +150,17 @@ test('CLI replay rejects oversized, malformed, and tampered reports with exit co
   }
 });
 
-test('CLI demo validates normal execution and every advertised fault', () => {
+test('CLI demo validates normal execution, release version, and every advertised fault', async () => {
+  const { ENGINE_VERSION } = await import('../dist/packages/core/index.js');
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const version = runCli(['--version']);
+  assert.equal(version.status, 0, version.stderr);
+  assert.equal(version.stdout, `${ENGINE_VERSION}\n`);
+  assert.equal(pkg.version, ENGINE_VERSION);
   const result = runCli(['demo']);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, '');
+  assert.ok(result.stdout.startsWith(`llm-systems-lab ${ENGINE_VERSION} numerical demo\n`));
   assert.match(result.stdout, /normal: PASS/);
   for (const fault of ['position-offset', 'cache-overwrite', 'mask-current-only']) {
     assert.match(result.stdout, new RegExp(`${fault}: DIVERGED at position [1-9][0-9]*`), fault);

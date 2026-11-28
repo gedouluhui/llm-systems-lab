@@ -41,6 +41,8 @@
     "serve:web": "node scripts/serve-web.mjs",
     "demo": "node dist/src/cli.js demo",
     "pretest": "npm run build && node scripts/build-web.mjs",
+    "docs:check": "node scripts/check-doc-counts.mjs",
+    "version:sync": "node scripts/check-doc-counts.mjs --write",
     "test": "node --test --test-concurrency=1 \"tests/**/*.test.mjs\"",
     "test:web": "node scripts/build-web.mjs && node --test --test-concurrency=1 tests/serve-web.test.mjs tests/web-build.test.mjs tests/web-i18n.test.mjs tests/web-view-model.test.mjs",
     "e2e:web": "node scripts/e2e-web.mjs",

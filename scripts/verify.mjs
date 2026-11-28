@@ -402,7 +402,7 @@ function requireEntry(entries, required, label) {
 }
 
 function validateTarballEntries(entries) {
-  const allowedTop = new Set(['package.json', 'README.md', 'LICENSE', 'dist']);
+  const allowedTop = new Set(['package.json', 'README.md', 'README.zh-CN.md', 'LICENSE', 'dist']);
   const forbidden = /(^|\/)(?:\.env(?:\..*)?|\.npmrc|kaggle\.json|id_rsa|credentials\.json|node_modules)(?:\/|$)/i;
   for (const entry of entries) {
     if (entry === 'package' || entry === 'package/') {

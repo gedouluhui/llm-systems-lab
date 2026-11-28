@@ -15,7 +15,7 @@ function isolatedProject(directory) {
   for (const entry of [
     'scripts/e2e-web.mjs', 'scripts/e2e-product.mjs', 'scripts/browser-discovery.mjs',
     'scripts/build-web.mjs', 'scripts/serve-web.mjs',
-    'tsconfig.web.json', 'package.json', 'packages',
+    'tsconfig.web.json', 'package.json', 'packages', 'src/version.ts',
     'apps/web/src', 'apps/web/static', 'node_modules/typescript',
   ]) {
     cpSync(path.join(ROOT, entry), path.join(directory, entry), { recursive: true });
